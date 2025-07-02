@@ -112,8 +112,29 @@ def train_bpe(
 
     return vocab, merges
 
+def open_results(path):
+    import pickle
+    from pathlib import Path
+
+    path = Path(path)
+    if path.exists():
+        with open(path, 'rb') as f:
+            results = pickle.load(f)
+        return results
+    else:
+        return None
+
+def dump_results(path, results):
+    import pickle
+    from pathlib import Path
+
+    path = Path(path)
+    with open(path, 'wb') as f:
+        pickle.dump(results, f)
+
 
 if __name__ == '__main__':
+    import os
     import cProfile
     profiler = cProfile.Profile()
     profiler.enable()
@@ -121,11 +142,28 @@ if __name__ == '__main__':
 
     TinyStories_train_set_path = 'cs336_basics/data/TinyStoriesV2-GPT4-train.txt'
     TinyStories_validation_set_path = 'cs336_basics/data/TinyStoriesV2-GPT4-valid.txt'
+
+    corpus_path = TinyStories_validation_set_path
     vocab_size = 512
-    special_tokens = ['<|endoftext|>', '<|examplespecialtoken|>']
+    special_tokens = ['<|endoftext|>']
     
-    vocab, merges = train_bpe(TinyStories_validation_set_path, vocab_size, special_tokens, 1)
+    vocab, merges = train_bpe(corpus_path, vocab_size, special_tokens, 1)
+
+    results = (vocab, merges)
+    corpus_name = os.path.splitext(os.path.basename(corpus_path))[0]
+    save_path = f'cs336_basics/results-{corpus_name}.pickle'
+    dump_results(save_path, results)
 
 
     profiler.disable()
     profiler.print_stats(sort='time')
+
+
+    print_results = True
+    if print_results:
+        vocab, merges = open_results(save_path)
+        print(vocab)
+
+    # find longest token
+    max_token_id = max(vocab, key=lambda token_id: len(vocab[token_id]))
+    print(vocab[max_token_id])
