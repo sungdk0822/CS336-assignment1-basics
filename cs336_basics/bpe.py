@@ -1,7 +1,12 @@
+import json
 import multiprocessing
+import pickle
 import regex as re
 from collections import Counter
+from cs336_basics import config
 from cs336_basics.pretokenization_example import find_chunk_boundaries
+from pathlib import Path
+from typing import Iterable, Iterator, Callable
 
 '''
 Problem (train_bpe): BPE Tokenizer Training (15 points)
@@ -23,11 +28,14 @@ merges: list[tuple[bytes, bytes]] A list of BPE merges produced from training. E
     is a tuple of bytes (<token1>, <token2>), representing that <token1> was merged with
     <token2>. The merges should be ordered by order of creation.
 '''
-def pretokenize(chunk: str, special_tokens: list[str], output_queue: multiprocessing.Queue):
-    escaped_special_tokens = [re.escape(special_token) for special_token in special_tokens]
-    pattern = '|'.join(escaped_special_tokens)
-    non_capturing_pattern = '(?:' + pattern + ')'
-    split_chunks = re.split(non_capturing_pattern, chunk)
+def pretokenize(chunk: str, special_tokens: list[str]) -> dict[str, int]:
+    if special_tokens:
+        escaped_special_tokens = [re.escape(special_token) for special_token in sorted(special_tokens, key=len, reverse=True)]
+        pattern = '|'.join(escaped_special_tokens)
+        non_capturing_pattern = '(?:' + pattern + ')'
+        split_chunks = re.split(non_capturing_pattern, chunk)
+    else:
+        split_chunks = [chunk]
 
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     pretokens = {}
@@ -39,7 +47,11 @@ def pretokenize(chunk: str, special_tokens: list[str], output_queue: multiproces
                 pretokens[pretoken] = 1
             else:
                 pretokens[pretoken] += 1
-    output_queue.put(pretokens)
+    
+    return pretokens
+
+def multiprocess_pretokenize(chunk: str, special_tokens: list[str], output_queue: multiprocessing.Queue):
+    output_queue.put(pretokenize(chunk, special_tokens))
 
 def train_bpe(
     input_path: str, 
@@ -56,7 +68,7 @@ def train_bpe(
         for start, end in zip(boundaries[:-1], boundaries[1:]):
             f.seek(start)
             chunk = f.read(end - start).decode("utf-8", errors="ignore")
-            process = multiprocessing.Process(target=pretokenize, args=(chunk, special_tokens, output_queue))
+            process = multiprocessing.Process(target=multiprocess_pretokenize, args=(chunk, special_tokens, output_queue))
             process.start()
             processes.append(process)
 
@@ -93,8 +105,8 @@ def train_bpe(
             merges.append(max_count_byte_pair)
             vocab[len(vocab)] = max_count_byte_pair[0] + max_count_byte_pair[1]
 
-            updated_byte_pretokens = {}
             # update pretokens by applying the merge
+            updated_byte_pretokens = {}
             for token in byte_pretokens:
                 updated_token = token
                 index = 0
@@ -113,9 +125,6 @@ def train_bpe(
     return vocab, merges
 
 def open_results(path):
-    import pickle
-    from pathlib import Path
-
     path = Path(path)
     if path.exists():
         with open(path, 'rb') as f:
@@ -125,45 +134,183 @@ def open_results(path):
         return None
 
 def dump_results(path, results):
-    import pickle
-    from pathlib import Path
-
     path = Path(path)
     with open(path, 'wb') as f:
         pickle.dump(results, f)
 
+class Tokenizer:
+    def __init__(self, vocab, merges, special_tokens=None):
+        '''
+        Construct a tokenizer from a given vocabulary, list of merges, and (optionally) 
+        a list of special tokens. This function should accept the following parameters:
+            vocab: dict[int, bytes]
+            merges: list[tuple[bytes, bytes]]
+            special_tokens: list[str] | None = None
+        '''
+        self.vocab = vocab
+        self.merges = merges
+        self.special_tokens = special_tokens if special_tokens is not None else []
 
-if __name__ == '__main__':
-    import os
-    import cProfile
-    profiler = cProfile.Profile()
-    profiler.enable()
+        for special_token in self.special_tokens:
+            byte_special_token = special_token.encode('utf-8')
+            if byte_special_token not in self.vocab.values():
+                self.vocab[len(vocab)] = byte_special_token
 
+        if '<|endoftext|>' not in self.special_tokens:
+            self.special_tokens.append('<|endoftext|>')
 
-    TinyStories_train_set_path = 'cs336_basics/data/TinyStoriesV2-GPT4-train.txt'
-    TinyStories_validation_set_path = 'cs336_basics/data/TinyStoriesV2-GPT4-valid.txt'
+        self.reversed_vocab = {token: token_id for token_id, token in self.vocab.items()}
 
-    corpus_path = TinyStories_validation_set_path
+    def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
+        '''
+        Class method that constructs and return a Tokenizer from a serialized vocabulary and list of merges
+        (in the same format that your BPE training code output) and (optionally) a list of special
+        tokens. This method should accept the following additional parameters:
+            vocab_filepath: str
+            merges_filepath: str
+            special_tokens: list[str] | None = None
+        '''
+        def load_vocab(vocab_filepath: str) -> dict[int, bytes]:
+            with open(vocab_filepath, 'r', encoding='utf-8') as f:
+                reverse_vocab = json.load(f)
+            vocab = {token_id: token.encode('utf-8') for token, token_id in reverse_vocab.items()}
+
+            return vocab
+        
+        def load_merges(merges_filepath: str) -> list[tuple[bytes, bytes]]:
+            merges = []
+            with open(merges_filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    pair_left, pair_right = line.split()
+                    pair = (pair_left.encode('utf-8'), pair_right.encode('utf-8'))
+                    merges.append(pair)
+
+            return merges
+            
+        vocab = load_vocab(vocab_filepath)
+        merges = load_merges(merges_filepath)
+
+        return Tokenizer(vocab, merges, special_tokens)
+
+    def encode(self, text: str) -> list[int]:
+        '''Encode an input text into a sequence of token IDs.'''
+        '''
+        Step 1: Pre-tokenize. 
+            We first pre-tokenize the sequence and represent each pre-token as a sequence of
+            UTF-8 bytes, just as we did in BPE training. We will be merging these bytes within each pre-token into
+            vocabulary elements, handling each pre-token independently (no merges across pre-token boundaries).
+        Step 2: Apply the merges. 
+            We then take the sequence of vocabulary element merges created during BPE
+            training, and apply it to our pre-tokens in the same order of creation.
+        '''
+
+        pretokens = pretokenize(text, self.special_tokens)
+        byte_pretokens = [tuple([int.to_bytes() for int in pretoken.encode('utf-8')]) for pretoken in pretokens]
+
+        def merge_pretoken(pretoken: tuple[bytes, ...]) -> tuple[bytes, ...]:
+            merged_token = pretoken
+            for merge_pair in self.merges:
+                index = 0
+                index_upper_bound = len(merged_token) - 1
+                while index < index_upper_bound:
+                    pair = (merged_token[index], merged_token[index+1])
+                    if pair == merge_pair:
+                        merged_token = merged_token[:index] + (pair[0] + pair[1], ) + merged_token[index+2:]
+                        index_upper_bound -= 1
+                    index += 1
+            
+            return merged_token
+        
+        merged_pretokens = [merge_pretoken(byte_pretoken) for byte_pretoken in byte_pretokens]
+
+        def encode_pretoken(merged_pretoken: tuple[bytes, ...]) -> tuple[int, ...]:
+            encoded_pretoken = []
+            for token in merged_pretoken:
+                encoded_pretoken.append(self.reversed_vocab[token])
+            
+            return tuple(encoded_pretoken)
+        
+        encoded_pretokens = [encode_pretoken(merged_pretoken) for merged_pretoken in merged_pretokens]
+        encode_dictionary = {pretoken: encoded_pretoken for pretoken, encoded_pretoken in zip(pretokens, encoded_pretokens)}
+
+        for special_token in self.special_tokens:
+            encode_dictionary[special_token] = self.reversed_vocab[special_token.encode('utf-8')]
+        
+        def encode_text(text: str, encode_dictionary: dict[str, tuple[int, ...]]) -> list[int]:
+            escaped_special_tokens = [re.escape(special_token) for special_token in sorted(self.special_tokens, key=len, reverse=True)]
+            pattern = '|'.join(escaped_special_tokens)
+            capturing_pattern = '(' + pattern + ')'
+            split_chunks = re.split(capturing_pattern, text)
+
+            PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+            
+            encoded_text = []
+            for split_chunk in split_chunks:
+                if split_chunk in self.special_tokens:
+                    encoded_text.append(encode_dictionary[split_chunk])
+                else: # normal chunk
+                    matches = re.finditer(PAT, split_chunk)
+                    for match in matches:
+                        pretoken = match.group()
+                        encoded_text.extend(encode_dictionary[pretoken])
+            
+            return encoded_text
+
+        return encode_text(text, encode_dictionary)
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+        '''
+        Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs. 
+        This is required for memory-efficient tokenization of large files that we cannot directly load into memory.
+        '''
+        for text in iterable:
+            yield from self.encode(text)
+
+    def decode(self, ids: list[int]) -> str:
+        '''Decode a sequence of token IDs into text.'''
+        '''
+        To decode a sequence of integer token IDs back to raw text, we can simply look up each ID's corresponding
+        entries in the vocabulary (a byte sequence), concatenate them together, and then decode the bytes to a
+        Unicode string.
+        Note that input IDs are not guaranteed to map to valid Unicode strings (since a user
+        could input any sequence of integer IDs). In the case that the input token IDs do not produce a valid
+        Unicode string, you should replace the malformed bytes with the official Unicode replacement character
+        U+FFFD. The errors argument of bytes.decode controls how Unicode decoding errors are handled, and
+        using errors='replace' will automatically replace malformed data with the replacement marker.
+        '''
+        concatenated_bytes = b''
+        for id in ids:
+            concatenated_bytes += self.vocab[id]
+        text = concatenated_bytes.decode('utf-8', errors='replace')
+
+        return text
+
+def run_train_bpe(print_vocab = True, find_longest_token = True): 
     vocab_size = 512
-    special_tokens = ['<|endoftext|>']
+    special_tokens = ['<|endoftext|>', '<|example|>']
     
-    vocab, merges = train_bpe(corpus_path, vocab_size, special_tokens, 1)
+    vocab, merges = train_bpe(config.corpus_path, vocab_size, special_tokens, 1)
 
-    results = (vocab, merges)
-    corpus_name = os.path.splitext(os.path.basename(corpus_path))[0]
-    save_path = f'cs336_basics/results-{corpus_name}.pickle'
-    dump_results(save_path, results)
-
-
-    profiler.disable()
-    profiler.print_stats(sort='time')
-
-
-    print_results = True
-    if print_results:
-        vocab, merges = open_results(save_path)
+    dump_results(config.vocab_path, vocab)
+    dump_results(config.merges_path, merges)
+    
+    if print_vocab:
+        vocab = open_results(config.vocab_path)
         print(vocab)
 
-    # find longest token
-    max_token_id = max(vocab, key=lambda token_id: len(vocab[token_id]))
-    print(vocab[max_token_id])
+    if find_longest_token:
+        max_token_id = max(vocab, key=lambda token_id: len(vocab[token_id]))
+        print(vocab[max_token_id])
+
+def get_profile_func(func: Callable) -> Callable:
+    import cProfile
+    def profile_func(*args, **kwargs):
+        profiler = cProfile.Profile()
+        profiler.enable()
+
+        func(*args, **kwargs)
+
+        profiler.disable()
+        profiler.print_stats(sort='time')
+
+    return profile_func
