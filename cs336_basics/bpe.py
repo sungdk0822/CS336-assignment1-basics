@@ -99,7 +99,7 @@ def train_bpe(
                     else:
                         byte_pair_counts[byte_pair] += byte_pretokens[token]
                         
-            max_count_byte_pair = max(sorted(byte_pair_counts, reverse=True), key=byte_pair_counts.get)
+            max_count_byte_pair = max(sorted(byte_pair_counts, reverse=True), key=lambda byte_pair: byte_pair_counts[byte_pair])
 
             # merging
             merges.append(max_count_byte_pair)
@@ -161,7 +161,7 @@ class Tokenizer:
 
         self.reversed_vocab = {token: token_id for token_id, token in self.vocab.items()}
 
-    def from_files(cls, vocab_filepath, merges_filepath, special_tokens=None):
+    def from_files(self, vocab_filepath, merges_filepath, special_tokens=None):
         '''
         Class method that constructs and return a Tokenizer from a serialized vocabulary and list of merges
         (in the same format that your BPE training code output) and (optionally) a list of special
@@ -298,7 +298,7 @@ def run_train_bpe(print_vocab = True, find_longest_token = True):
         vocab = open_results(config.vocab_path)
         print(vocab)
 
-    if find_longest_token:
+    if find_longest_token and vocab is not None:
         max_token_id = max(vocab, key=lambda token_id: len(vocab[token_id]))
         print(vocab[max_token_id])
 
