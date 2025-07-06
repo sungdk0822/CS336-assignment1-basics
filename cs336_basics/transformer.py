@@ -1,3 +1,4 @@
+from turtle import forward
 import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
@@ -77,3 +78,43 @@ class RMSNorm(nn.Module):
         result = x * self.g.reshape(1, 1, self.d_model) / rms.unsqueeze_(dim=-1)
 
         return result.to(in_dtype)
+
+class SwiGLU(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        super().__init__()
+        # d_ff = round( (d_model * 8 / 3) / 64 ) * 64
+        # if d_ff == 0:
+        #     d_ff = 64
+        sigma = ( 2 / (d_model + d_ff) ) ** 0.5
+        self.W_1 = nn.Parameter(
+            trunc_normal_(
+                torch.empty(d_ff, d_model, device=device, dtype=dtype, requires_grad=True), 
+                mean=0,
+                std=sigma,
+                a=-3 * sigma,
+                b=3 * sigma
+            )
+        )
+        self.W_2 = nn.Parameter(
+            trunc_normal_(
+                torch.empty(d_model, d_ff, device=device, dtype=dtype, requires_grad=True), 
+                mean=0,
+                std=sigma,
+                a=-3 * sigma,
+                b=3 * sigma
+            )
+        )
+        self.W_3 = nn.Parameter(
+            trunc_normal_(
+                torch.empty(d_ff, d_model, device=device, dtype=dtype, requires_grad=True), 
+                mean=0,
+                std=sigma,
+                a=-3 * sigma,
+                b=3 * sigma
+            )
+        )
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        def SiLU(x: torch.Tensor) -> torch.Tensor:
+            return x * torch.sigmoid(x)
+        return ( SiLU(x @ self.W_1.T) * (x @ self.W_3.T) ) @ self.W_2.T
