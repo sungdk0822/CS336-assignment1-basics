@@ -53,3 +53,27 @@ class Embedding(nn.Module):
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         '''Lookup the embedding vectors for the given token IDs.'''
         return self.embedding[token_ids]
+
+class RMSNorm(nn.Module):
+    def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
+        '''
+        Construct the RMSNorm module. This function should accept the following parameters:
+            d_model: int Hidden dimension of the model
+            eps: float = 1e-5 Epsilon value for numerical stability
+            device: torch.device | None = None Device to store the parameters on
+            dtype: torch.dtype | None = None Data type of the parameters
+        '''
+        super().__init__()
+        self.g = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype, requires_grad=True))
+        self.d_model = d_model
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        '''Process an input tensor of shape (batch_size, sequence_length, d_model) and return a tensor of the same shape.'''
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+        
+        rms = ( (x ** 2).sum(dim=-1) / self.d_model + self.eps ) ** 0.5
+        result = x * self.g.reshape(1, 1, self.d_model) / rms.unsqueeze_(dim=-1)
+
+        return result.to(in_dtype)
