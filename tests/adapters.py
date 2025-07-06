@@ -29,8 +29,10 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-
-    raise NotImplementedError
+    from cs336_basics.transformer import Linear
+    linear = Linear(d_in, d_out)
+    linear.load_state_dict({'W': weights})
+    return linear.forward(in_features)
 
 
 def run_embedding(
@@ -590,4 +592,4 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
     from cs336_basics.bpe import train_bpe
-    return train_bpe(input_path, vocab_size, special_tokens)
+    return train_bpe(str(input_path), vocab_size, special_tokens)
