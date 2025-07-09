@@ -160,3 +160,12 @@ class RoPE(nn.Module):
         rotated_x = rotated_x.reshape(*x.shape) # (batch_size, seq_len, d_k)
 
         return rotated_x
+
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    assert -x.ndim <= dim < x.ndim
+    if dim < 0:
+        dim += x.ndim
+    x -= torch.max(x, dim=dim, keepdim=True).values
+    exp_x = torch.exp(x)
+
+    return exp_x / exp_x.sum(dim=dim, keepdim=True)
