@@ -29,7 +29,7 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
-    from cs336_basics.transformer import Linear
+    from cs336_basics.transformer_language_model import Linear
     linear = Linear(d_in, d_out)
     linear.load_state_dict({'W': weights})
     return linear.forward(in_features)
@@ -53,7 +53,7 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-    from cs336_basics.transformer import Embedding
+    from cs336_basics.transformer_language_model import Embedding
     embedding = Embedding(vocab_size, d_model)
     embedding.load_state_dict({'embedding': weights})
     return embedding.forward(token_ids)
@@ -88,7 +88,7 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    from cs336_basics.transformer import SwiGLU
+    from cs336_basics.transformer_language_model import SwiGLU
     swiglu = SwiGLU(d_model, d_ff)
     swiglu.load_state_dict({'W_1': w1_weight, 'W_2': w2_weight, 'W_3': w3_weight})
     return swiglu.forward(in_features)
@@ -208,7 +208,7 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    from cs336_basics.transformer import RoPE
+    from cs336_basics.transformer_language_model import RoPE
     rope = RoPE(theta, d_k, max_seq_len)
     return rope.forward(in_query_or_key, token_positions)
 
@@ -310,7 +310,7 @@ def run_transformer_lm(
         num_heads (int): Number of heads to use in multi-headed attention. `d_model` must be
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
-        rope_theta (float): The RoPE $\Theta$ parameter.
+        rope_theta (float): The RoPE $\theta$ parameter.
         weights (dict[str, Tensor]): 
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
@@ -388,7 +388,7 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    from cs336_basics.transformer import RMSNorm
+    from cs336_basics.transformer_language_model import RMSNorm
     rmsnorm = RMSNorm(d_model, eps)
     rmsnorm.load_state_dict({'g': weights})
     return rmsnorm.forward(in_features)
