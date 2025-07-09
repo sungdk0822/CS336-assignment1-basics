@@ -1,9 +1,7 @@
-from turtle import forward
 import torch
 from torch import nn
 from torch.nn.init import trunc_normal_
 from einops import einsum
-from jaxtyping import Float, Int
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None): 
@@ -82,9 +80,6 @@ class RMSNorm(nn.Module):
 class SwiGLU(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
         super().__init__()
-        # d_ff = round( (d_model * 8 / 3) / 64 ) * 64
-        # if d_ff == 0:
-        #     d_ff = 64
         sigma = ( 2 / (d_model + d_ff) ) ** 0.5
         self.W_1 = nn.Parameter(
             trunc_normal_(
@@ -118,3 +113,50 @@ class SwiGLU(nn.Module):
         def SiLU(x: torch.Tensor) -> torch.Tensor:
             return x * torch.sigmoid(x)
         return ( SiLU(x @ self.W_1.T) * (x @ self.W_3.T) ) @ self.W_2.T
+
+class RoPE(nn.Module):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        '''
+        Construct the RoPE module and create buffers if needed.
+            theta: float Θ value for the RoPE
+            d_k: int dimension of query and key vectors
+            max_seq_len: int Maximum sequence length that will be inputted
+            device: torch.device | None = None Device to store the buffer on
+        '''
+        super().__init__()
+
+        i_indices = torch.arange(max_seq_len)
+        k_indices = torch.arange(0, d_k // 2)
+        i_grid, k_grid = torch.meshgrid(i_indices, k_indices)
+
+        theta_values = i_grid / theta ** (2 * k_grid / d_k) # (max_seq_len, d_k // 2)
+        cos_values = torch.cos(theta_values) # (max_seq_len, d_k // 2)
+        sin_values = torch.sin(theta_values) # (max_seq_len, d_k // 2)
+
+        self.register_buffer(name='cos', tensor=cos_values, persistent=False)
+        self.register_buffer(name='sin', tensor=sin_values, persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+        '''
+        Process an input tensor of shape (..., seq_len, d_k) and return a tensor of the same shape.
+        Note that you should tolerate x with an arbitrary number of batch dimensions.
+        You should assume that the token positions are a tensor of shape (..., seq_len) 
+        specifying the token positions of x along the sequence dimension.
+        '''
+        cos_values = self.cos[token_positions] # self.cos: (max_seq_len, d_k // 2) -> cos_values: (seq_len, d_k // 2)
+        sin_values = self.sin[token_positions] # self.sin: (max_seq_len, d_k // 2) -> sin_values: (seq_len, d_k // 2)
+
+        x_even = x[..., ::2] # (batch_size, seq_len, d_k // 2)
+        x_odd = x[..., 1::2] # (batch_size, seq_len, d_k // 2)
+
+        rotated_x_even = x_even * cos_values - x_odd * sin_values # (batch_size, seq_len, d_k // 2)
+        rotated_x_odd = x_even * sin_values + x_odd * cos_values # (batch_size, seq_len, d_k // 2)
+
+        rotated_x_even.unsqueeze_(dim=-2) # (batch_size, seq_len, 1, d_k // 2)
+        rotated_x_odd.unsqueeze_(dim=-2) # (batch_size, seq_len, 1, d_k // 2)
+
+        rotated_x = torch.cat([rotated_x_even, rotated_x_odd], dim=-2) # (batch_size, seq_len, 2, d_k // 2)
+        rotated_x = rotated_x.transpose(-2, -1) # (batch_size, seq_len, d_k // 2, 2)
+        rotated_x = rotated_x.reshape(*x.shape) # (batch_size, seq_len, d_k)
+
+        return rotated_x
