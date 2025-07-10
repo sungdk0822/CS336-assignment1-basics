@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+from torch import inf, nn
 from torch.nn.init import trunc_normal_
 from einops import einsum
 
@@ -143,8 +143,8 @@ class RoPE(nn.Module):
         You should assume that the token positions are a tensor of shape (..., seq_len) 
         specifying the token positions of x along the sequence dimension.
         '''
-        cos_values = self.cos[token_positions] # self.cos: (max_seq_len, d_k // 2) -> cos_values: (seq_len, d_k // 2)
-        sin_values = self.sin[token_positions] # self.sin: (max_seq_len, d_k // 2) -> sin_values: (seq_len, d_k // 2)
+        cos_values = self.cos[token_positions] # self.cos: (max_seq_len, d_k // 2) -> cos_values: (seq_len, d_k // 2) # pyright: ignore
+        sin_values = self.sin[token_positions] # self.sin: (max_seq_len, d_k // 2) -> sin_values: (seq_len, d_k // 2) # pyright: ignore
 
         x_even = x[..., ::2] # (batch_size, seq_len, d_k // 2)
         x_odd = x[..., 1::2] # (batch_size, seq_len, d_k // 2)
@@ -169,3 +169,30 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     exp_x = torch.exp(x)
 
     return exp_x / exp_x.sum(dim=dim, keepdim=True)
+
+'''
+Problem (scaled_dot_product_attention): Implement scaled dot-product attention (5 points)
+
+Deliverable: Implement the scaled dot-product attention function. Your implementation should
+handle keys and queries of shape (batch_size, ..., seq_len, d_k) and values of shape
+(batch_size, ..., seq_len, d_v), where ... represents any number of other batch-like
+dimensions (if provided). The implementation should return an output with the shape (batch_size,
+..., d_v). See section 3.3 for a discussion on batch-like dimensions.
+Your implementation should also support an optional user-provided boolean mask of shape (seq_len,
+seq_len). The attention probabilities of positions with a mask value of True should collectively sum
+to 1, and the attention probabilities of positions with a mask value of False should be zero.
+'''
+def scaled_dot_product_attention(queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask=None):
+    '''
+    queries: (batch_size, ..., n, d_k)
+    keys: (batch_size, ..., m, d_k)
+    values: (batch_size, ..., m, d_v)
+    mask: (n, m)
+    '''
+    d_k = queries.shape[-1]
+    pre_softmax = queries @ keys.transpose(-2, -1) / d_k ** 0.5 # (batch_size, ..., n, m)
+    if mask is not None:
+        pre_softmax.masked_fill_(~mask, -inf) # (batch_size, ..., n, m)
+    post_softmax = softmax(pre_softmax, dim=-1) # (batch_size, ..., n, m)
+
+    return post_softmax @ values # (batch_size, ..., n, d_v)
