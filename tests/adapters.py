@@ -297,7 +297,16 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer_language_model import PrenormTransformer
+    prenormtransformer = PrenormTransformer(d_model, num_heads, d_ff, max_seq_len, theta)
+    prenormtransformer.MHA.W_Q.load_state_dict({'W': weights['attn.q_proj.weight']})
+    prenormtransformer.MHA.W_K.load_state_dict({'W': weights['attn.k_proj.weight']})
+    prenormtransformer.MHA.W_V.load_state_dict({'W': weights['attn.v_proj.weight']})
+    prenormtransformer.MHA.W_O.load_state_dict({'W': weights['attn.output_proj.weight']})
+    prenormtransformer.swiglu.load_state_dict({'W_1': weights['ffn.w1.weight'], 'W_2': weights['ffn.w2.weight'], 'W_3': weights['ffn.w3.weight']})
+    prenormtransformer.rmsnorm_1.load_state_dict({'g': weights['ln1.weight']})
+    prenormtransformer.rmsnorm_2.load_state_dict({'g': weights['ln2.weight']})
+    return prenormtransformer.forward(in_features)
 
 
 def run_transformer_lm(

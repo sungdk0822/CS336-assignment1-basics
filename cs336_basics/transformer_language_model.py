@@ -255,3 +255,33 @@ class MultiHeadSelfAttention(nn.Module):
         post_concat = pre_concat.transpose(-3, -2).reshape_as(x) # (batch_size, seq_len, d_model)
 
         return self.W_O.forward(post_concat) # (batch_size, seq_len, d_model)
+
+class PrenormTransformer(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float):
+        super().__init__()
+        rope = RoPE(theta, d_model // num_heads, max_seq_len)
+        self.MHA = MultiHeadSelfAttention(d_model, num_heads, rope)
+        self.swiglu = SwiGLU(d_model, d_ff)
+        self.rmsnorm_1 = RMSNorm(d_model)
+        self.rmsnorm_2 = RMSNorm(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.MHA.forward(self.rmsnorm_1.forward(x))
+        x = x + self.swiglu.forward(self.rmsnorm_2.forward(x))
+        
+        return x
+
+class TransformerLanguageModel(nn.Module):
+    def __init__(
+        self, 
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int, 
+        max_seq_len: int, 
+        theta: float, 
+        vocab_size: int, 
+        context_length: int, 
+        num_layers: int
+    ):
+        super().__init__()
+        
