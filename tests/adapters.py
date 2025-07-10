@@ -8,6 +8,7 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
+from torch.nn import MultiheadAttention
 
 
 
@@ -146,7 +147,13 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer_language_model import MultiHeadSelfAttention
+    multiheadselfattention = MultiHeadSelfAttention(d_model, num_heads)
+    multiheadselfattention.W_Q.load_state_dict({'W': q_proj_weight})
+    multiheadselfattention.W_K.load_state_dict({'W': k_proj_weight})
+    multiheadselfattention.W_V.load_state_dict({'W': v_proj_weight})
+    multiheadselfattention.W_O.load_state_dict({'W': o_proj_weight})
+    return multiheadselfattention.forward(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -186,7 +193,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer_language_model import MultiHeadSelfAttention, RoPE
+    rope = RoPE(theta, d_model // num_heads, max_seq_len)
+    multiheadselfattention = MultiHeadSelfAttention(d_model, num_heads, rope)
+    multiheadselfattention.W_Q.load_state_dict({'W': q_proj_weight})
+    multiheadselfattention.W_K.load_state_dict({'W': k_proj_weight})
+    multiheadselfattention.W_V.load_state_dict({'W': v_proj_weight})
+    multiheadselfattention.W_O.load_state_dict({'W': o_proj_weight})
+    return multiheadselfattention.forward_with_rope(in_features, token_positions)
 
 
 def run_rope(

@@ -1,3 +1,5 @@
+import token
+from turtle import forward
 import torch
 from torch import inf, nn
 from torch.nn.init import trunc_normal_
@@ -182,7 +184,12 @@ Your implementation should also support an optional user-provided boolean mask o
 seq_len). The attention probabilities of positions with a mask value of True should collectively sum
 to 1, and the attention probabilities of positions with a mask value of False should be zero.
 '''
-def scaled_dot_product_attention(queries: torch.Tensor, keys: torch.Tensor, values: torch.Tensor, mask=None):
+def scaled_dot_product_attention(
+    queries: torch.Tensor, 
+    keys: torch.Tensor, 
+    values: torch.Tensor, 
+    mask: torch.Tensor | None = None
+) -> torch.Tensor:
     '''
     queries: (batch_size, ..., n, d_k)
     keys: (batch_size, ..., m, d_k)
@@ -196,3 +203,55 @@ def scaled_dot_product_attention(queries: torch.Tensor, keys: torch.Tensor, valu
     post_softmax = softmax(pre_softmax, dim=-1) # (batch_size, ..., n, m)
 
     return post_softmax @ values # (batch_size, ..., n, d_v)
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, rope: RoPE | None = None):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.d_model = d_model
+        self.num_heads = num_heads
+        if rope is not None:
+            self.rope = rope
+        self.d_k = self.d_v = d_model // num_heads
+        self.W_Q = Linear(d_model, d_model)
+        self.W_K = Linear(d_model, d_model)
+        self.W_V = Linear(d_model, d_model)
+        self.W_O = Linear(d_model, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (batch_size, seq_len, d_model)
+        Q = self.W_Q.forward(x) # (batch_size, seq_len, d_model)
+        K = self.W_K.forward(x) # (batch_size, seq_len, d_model)
+        V = self.W_V.forward(x) # (batch_size, seq_len, d_model)
+        Q = Q.reshape(*(Q.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        K = K.reshape(*(K.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        V = V.reshape(*(V.shape[:-1]), self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
+
+        seq_len = x.shape[-2]
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        pre_concat = scaled_dot_product_attention(Q, K, V, causal_mask) # (batch_size, num_heads, seq_len, d_v)
+        post_concat = pre_concat.transpose(-3, -2).reshape_as(x) # (batch_size, seq_len, d_model)
+
+        return self.W_O.forward(post_concat) # (batch_size, seq_len, d_model)
+
+    def forward_with_rope(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        assert self.rope is not None
+        Q = self.W_Q.forward(x) # (batch_size, seq_len, d_model)
+        K = self.W_K.forward(x) # (batch_size, seq_len, d_model)
+        V = self.W_V.forward(x) # (batch_size, seq_len, d_model)
+        Q = Q.reshape(*(Q.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        K = K.reshape(*(K.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        V = V.reshape(*(V.shape[:-1]), self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
+
+        seq_len = x.shape[-2]
+        if token_positions is None:
+            token_positions = torch.arange(seq_len)
+        # apply RoPE
+        Q = self.rope.forward(Q, token_positions)
+        K = self.rope.forward(K, token_positions)
+
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        pre_concat = scaled_dot_product_attention(Q, K, V, causal_mask) # (batch_size, num_heads, seq_len, d_v)
+        post_concat = pre_concat.transpose(-3, -2).reshape_as(x) # (batch_size, seq_len, d_model)
+
+        return self.W_O.forward(post_concat) # (batch_size, seq_len, d_model)
