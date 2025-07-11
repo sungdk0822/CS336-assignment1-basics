@@ -50,8 +50,10 @@ def pretokenize(chunk: str, special_tokens: list[str]) -> dict[str, int]:
     
     return pretokens
 
+
 def multiprocess_pretokenize(chunk: str, special_tokens: list[str], output_queue: multiprocessing.Queue):
     output_queue.put(pretokenize(chunk, special_tokens))
+
 
 def train_bpe(
     input_path: str, 
@@ -124,6 +126,7 @@ def train_bpe(
 
     return vocab, merges
 
+
 def open_results(path):
     path = Path(path)
     if path.exists():
@@ -133,10 +136,12 @@ def open_results(path):
     else:
         return None
 
+
 def dump_results(path, results):
     path = Path(path)
     with open(path, 'wb') as f:
         pickle.dump(results, f)
+
 
 class Tokenizer:
     def __init__(self, vocab, merges, special_tokens=None):
@@ -285,6 +290,7 @@ class Tokenizer:
 
         return text
 
+
 def run_train_bpe(print_vocab = True, find_longest_token = True): 
     vocab_size = 512
     special_tokens = ['<|endoftext|>', '<|example|>']
@@ -301,6 +307,7 @@ def run_train_bpe(print_vocab = True, find_longest_token = True):
     if find_longest_token and vocab is not None:
         max_token_id = max(vocab, key=lambda token_id: len(vocab[token_id]))
         print(vocab[max_token_id])
+
 
 def get_profile_func(func: Callable) -> Callable:
     import cProfile
