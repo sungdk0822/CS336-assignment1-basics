@@ -90,7 +90,7 @@ def run_swiglu(
     # swiglu.w3.weight.data = w3_weight
     from cs336_basics.transformer_language_model import SwiGLU
     swiglu = SwiGLU(d_model, d_ff)
-    swiglu.load_state_dict({'W_1': w1_weight, 'W_2': w2_weight, 'W_3': w3_weight})
+    swiglu.load_state_dict({'W_1.W': w1_weight, 'W_2.W': w2_weight, 'W_3.W': w3_weight})
     return swiglu.forward(in_features)
 
 
@@ -302,7 +302,7 @@ def run_transformer_block(
     prenormtransformer.MHA.W_K.load_state_dict({'W': weights['attn.k_proj.weight']})
     prenormtransformer.MHA.W_V.load_state_dict({'W': weights['attn.v_proj.weight']})
     prenormtransformer.MHA.W_O.load_state_dict({'W': weights['attn.output_proj.weight']})
-    prenormtransformer.swiglu.load_state_dict({'W_1': weights['ffn.w1.weight'], 'W_2': weights['ffn.w2.weight'], 'W_3': weights['ffn.w3.weight']})
+    prenormtransformer.swiglu.load_state_dict({'W_1.W': weights['ffn.w1.weight'], 'W_2.W': weights['ffn.w2.weight'], 'W_3.W': weights['ffn.w3.weight']})
     prenormtransformer.rmsnorm_1.load_state_dict({'g': weights['ln1.weight']})
     prenormtransformer.rmsnorm_2.load_state_dict({'g': weights['ln2.weight']})
     return prenormtransformer.forward(in_features)
@@ -395,7 +395,7 @@ def run_transformer_lm(
         prenormtransformer.MHA.W_K.load_state_dict({'W': weights[f'layers.{i}.attn.k_proj.weight']}) # pyright: ignore
         prenormtransformer.MHA.W_V.load_state_dict({'W': weights[f'layers.{i}.attn.v_proj.weight']}) # pyright: ignore
         prenormtransformer.MHA.W_O.load_state_dict({'W': weights[f'layers.{i}.attn.output_proj.weight']}) # pyright: ignore
-        prenormtransformer.swiglu.load_state_dict({'W_1': weights[f'layers.{i}.ffn.w1.weight'], 'W_2': weights[f'layers.{i}.ffn.w2.weight'], 'W_3': weights[f'layers.{i}.ffn.w3.weight']}) # pyright: ignore
+        prenormtransformer.swiglu.load_state_dict({'W_1.W': weights[f'layers.{i}.ffn.w1.weight'], 'W_2.W': weights[f'layers.{i}.ffn.w2.weight'], 'W_3.W': weights[f'layers.{i}.ffn.w3.weight']}) # pyright: ignore
         prenormtransformer.rmsnorm_1.load_state_dict({'g': weights[f'layers.{i}.ln1.weight']}) # pyright: ignore
         prenormtransformer.rmsnorm_2.load_state_dict({'g': weights[f'layers.{i}.ln2.weight']}) # pyright: ignore
     tlm.ln_final.load_state_dict({'g': weights['ln_final.weight']})

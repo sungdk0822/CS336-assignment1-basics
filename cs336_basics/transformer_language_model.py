@@ -18,7 +18,7 @@ class Linear(nn.Module):
         sigma = (2 / (in_features + out_features)) ** 0.5
         self.W = nn.Parameter(
             trunc_normal_(
-                torch.zeros(out_features, in_features, device=device, dtype=dtype, requires_grad=True), 
+                torch.empty(out_features, in_features, device=device, dtype=dtype, requires_grad=True), 
                 mean=0,
                 std=sigma,
                 a=-3 * sigma,
@@ -84,39 +84,14 @@ class RMSNorm(nn.Module):
 class SwiGLU(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
         super().__init__()
-        sigma = ( 2 / (d_model + d_ff) ) ** 0.5
-        self.W_1 = nn.Parameter(
-            trunc_normal_(
-                torch.empty(d_ff, d_model, device=device, dtype=dtype, requires_grad=True), 
-                mean=0,
-                std=sigma,
-                a=-3 * sigma,
-                b=3 * sigma
-            )
-        )
-        self.W_2 = nn.Parameter(
-            trunc_normal_(
-                torch.empty(d_model, d_ff, device=device, dtype=dtype, requires_grad=True), 
-                mean=0,
-                std=sigma,
-                a=-3 * sigma,
-                b=3 * sigma
-            )
-        )
-        self.W_3 = nn.Parameter(
-            trunc_normal_(
-                torch.empty(d_ff, d_model, device=device, dtype=dtype, requires_grad=True), 
-                mean=0,
-                std=sigma,
-                a=-3 * sigma,
-                b=3 * sigma
-            )
-        )
+        self.W_1 = Linear(d_model, d_ff, device, dtype)
+        self.W_2 = Linear(d_ff, d_model, device, dtype)
+        self.W_3 = Linear(d_model, d_ff, device, dtype)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         def SiLU(x: torch.Tensor) -> torch.Tensor:
             return x * torch.sigmoid(x)
-        return ( SiLU(x @ self.W_1.T) * (x @ self.W_3.T) ) @ self.W_2.T
+        return self.W_2( SiLU(self.W_1(x)) * (self.W_3(x)) )
 
 
 class RoPE(nn.Module):
@@ -307,3 +282,71 @@ class TransformerLanguageModel(nn.Module):
         x = self.lm_head.forward(x)
         
         return x
+
+
+if __name__ == '__main__':
+    '''
+    Problem (transformer_accounting): Transformer LM resource accounting (5 points)
+        (a) Consider GPT-2 XL, which has the following configuration:
+            vocab_size : 50,257
+            context_length : 1,024
+            num_layers : 48
+            d_model : 1,600
+            num_heads : 25
+            d_ff : 6,400
+        Suppose we constructed our model using this configuration. How many trainable parameters
+        would our model have? Assuming each parameter is represented using single-precision floating
+        point, how much memory is required to just load this model?
+        Deliverable: A one-to-two sentence response.
+    '''
+    # GPT-2 XL:
+    vocab_size = 50257
+    context_length = 1024
+    num_layers = 48
+    d_model = 1600
+    num_heads = 25
+    d_ff = 6400
+    trainable_parameters_num = (  vocab_size * d_model # token_embeddings
+                                + num_layers * ( 
+                                    4 * d_model * d_model # W_QKVO in MHA
+                                    + 3 * d_model * d_ff # W_1, W_2, W_3 in swiglu
+                                    + d_model # g in rmsnorm_1
+                                    + d_model # g in rmsnorm_2
+                                    # + context_length * (d_model // num_heads // 2) * 2 # sin, cos cache in rope (nontrainable)
+                                ) # layers
+                                + d_model # g in ln_final
+                                + d_model * vocab_size  ) # W in lm_head
+
+    print(trainable_parameters_num) # 2127057600
+
+    tlm = TransformerLanguageModel(d_model, num_heads, d_ff, 10000.0, vocab_size, context_length, num_layers)
+    real_trainable_parameters_num = sum(parameter.numel() for parameter in tlm.parameters() if parameter.requires_grad)
+    print(real_trainable_parameters_num) # 2127057600
+
+    '''
+        (b) Identify the matrix multiplies required to complete a forward pass of our GPT-2 XL-shaped
+        model. How many FLOPs do these matrix multiplies require in total? Assume that our input
+        sequence has context_length tokens.
+        Deliverable: A list of matrix multiplies (with descriptions), and the total number of FLOPs
+        required.
+        (c) Based on your analysis above, which parts of the model require the most FLOPs?
+        Deliverable: A one-to-two sentence response.
+    '''
+    # to do ...
+
+    '''
+        (d) Repeat your analysis with GPT-2 small (12 layers, 768 d_model, 12 heads), GPT-2 medium (24
+        layers, 1024 d_model, 16 heads), and GPT-2 large (36 layers, 1280 d_model, 20 heads). As the
+        model size increases, which parts of the Transformer LM take up proportionally more or less of
+        the total FLOPs?
+        Deliverable: For each model, provide a breakdown of model components and its associated
+        FLOPs (as a proportion of the total FLOPs required for a forward pass). In addition, provide a
+        one-to-two sentence description of how varying the model size changes the proportional FLOPs
+        of each component.
+        (e) Take GPT-2 XL and increase the context length to 16,384. How does the total FLOPs for one
+        forward pass change?
+        How do the relative contribution of FLOPs of the model components
+        change?
+        Deliverable: A one-to-two sentence response.
+    '''
+    # to do ...
