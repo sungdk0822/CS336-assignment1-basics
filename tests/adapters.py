@@ -8,7 +8,6 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
-from torch.nn import MultiheadAttention
 
 
 
@@ -388,7 +387,20 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    from cs336_basics.transformer_language_model import TransformerLanguageModel
+    tlm =  TransformerLanguageModel(d_model, num_heads, d_ff, rope_theta, vocab_size, context_length, num_layers)
+    tlm.token_embeddings.load_state_dict({'embedding': weights['token_embeddings.weight']})
+    for i, prenormtransformer in enumerate(tlm.layers):
+        prenormtransformer.MHA.W_Q.load_state_dict({'W': weights[f'layers.{i}.attn.q_proj.weight']}) # pyright: ignore
+        prenormtransformer.MHA.W_K.load_state_dict({'W': weights[f'layers.{i}.attn.k_proj.weight']}) # pyright: ignore
+        prenormtransformer.MHA.W_V.load_state_dict({'W': weights[f'layers.{i}.attn.v_proj.weight']}) # pyright: ignore
+        prenormtransformer.MHA.W_O.load_state_dict({'W': weights[f'layers.{i}.attn.output_proj.weight']}) # pyright: ignore
+        prenormtransformer.swiglu.load_state_dict({'W_1': weights[f'layers.{i}.ffn.w1.weight'], 'W_2': weights[f'layers.{i}.ffn.w2.weight'], 'W_3': weights[f'layers.{i}.ffn.w3.weight']}) # pyright: ignore
+        prenormtransformer.rmsnorm_1.load_state_dict({'g': weights[f'layers.{i}.ln1.weight']}) # pyright: ignore
+        prenormtransformer.rmsnorm_2.load_state_dict({'g': weights[f'layers.{i}.ln2.weight']}) # pyright: ignore
+    tlm.ln_final.load_state_dict({'g': weights['ln_final.weight']})
+    tlm.lm_head.load_state_dict({'W': weights['lm_head.weight']})
+    return tlm.forward(in_indices)
 
 
 def run_rmsnorm(

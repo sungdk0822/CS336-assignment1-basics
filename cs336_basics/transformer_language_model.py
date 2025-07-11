@@ -1,12 +1,11 @@
-import token
-from turtle import forward
 import torch
 from torch import inf, nn
 from torch.nn.init import trunc_normal_
 from einops import einsum
 
+
 class Linear(nn.Module):
-    def __init__(self, in_features, out_features, device=None, dtype=None): 
+    def __init__(self, in_features: int, out_features: int, device=None, dtype=None): 
         '''
         Construct a linear transformation module. 
         This function should accept the following parameters:
@@ -31,8 +30,9 @@ class Linear(nn.Module):
         '''Apply the linear transformation to the input.'''
         return einsum(x, self.W, '... d_in, d_out d_in -> ... d_out')
 
+
 class Embedding(nn.Module):
-    def __init__(self, num_embeddings, embedding_dim, device=None, dtype=None):
+    def __init__(self, num_embeddings: int, embedding_dim: int, device=None, dtype=None):
         '''
         Construct an embedding module. This function should accept the following parameters:
             num_embeddings: int Size of the vocabulary
@@ -54,6 +54,7 @@ class Embedding(nn.Module):
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         '''Lookup the embedding vectors for the given token IDs.'''
         return self.embedding[token_ids]
+
 
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, eps: float = 1e-5, device=None, dtype=None):
@@ -78,6 +79,7 @@ class RMSNorm(nn.Module):
         result = x * self.g.reshape(1, 1, self.d_model) / rms.unsqueeze_(dim=-1)
 
         return result.to(in_dtype)
+
 
 class SwiGLU(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
@@ -115,6 +117,7 @@ class SwiGLU(nn.Module):
         def SiLU(x: torch.Tensor) -> torch.Tensor:
             return x * torch.sigmoid(x)
         return ( SiLU(x @ self.W_1.T) * (x @ self.W_3.T) ) @ self.W_2.T
+
 
 class RoPE(nn.Module):
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
@@ -163,6 +166,7 @@ class RoPE(nn.Module):
 
         return rotated_x
 
+
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     assert -x.ndim <= dim < x.ndim
     if dim < 0:
@@ -171,6 +175,7 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     exp_x = torch.exp(x)
 
     return exp_x / exp_x.sum(dim=dim, keepdim=True)
+
 
 '''
 Problem (scaled_dot_product_attention): Implement scaled dot-product attention (5 points)
@@ -204,6 +209,7 @@ def scaled_dot_product_attention(
 
     return post_softmax @ values # (batch_size, ..., n, d_v)
 
+
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, rope: RoPE | None = None):
         super().__init__()
@@ -223,9 +229,9 @@ class MultiHeadSelfAttention(nn.Module):
         Q = self.W_Q.forward(x) # (batch_size, seq_len, d_model)
         K = self.W_K.forward(x) # (batch_size, seq_len, d_model)
         V = self.W_V.forward(x) # (batch_size, seq_len, d_model)
-        Q = Q.reshape(*(Q.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
-        K = K.reshape(*(K.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
-        V = V.reshape(*(V.shape[:-1]), self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
+        Q = Q.reshape(*Q.shape[:-1], self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        K = K.reshape(*K.shape[:-1], self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        V = V.reshape(*V.shape[:-1], self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
 
         seq_len = x.shape[-2]
         causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
@@ -239,9 +245,9 @@ class MultiHeadSelfAttention(nn.Module):
         Q = self.W_Q.forward(x) # (batch_size, seq_len, d_model)
         K = self.W_K.forward(x) # (batch_size, seq_len, d_model)
         V = self.W_V.forward(x) # (batch_size, seq_len, d_model)
-        Q = Q.reshape(*(Q.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
-        K = K.reshape(*(K.shape[:-1]), self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
-        V = V.reshape(*(V.shape[:-1]), self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
+        Q = Q.reshape(*Q.shape[:-1], self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        K = K.reshape(*K.shape[:-1], self.num_heads, self.d_k).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_k)
+        V = V.reshape(*V.shape[:-1], self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
 
         seq_len = x.shape[-2]
         if token_positions is None:
@@ -256,6 +262,7 @@ class MultiHeadSelfAttention(nn.Module):
 
         return self.W_O.forward(post_concat) # (batch_size, seq_len, d_model)
 
+
 class PrenormTransformer(nn.Module):
     def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float):
         super().__init__()
@@ -266,10 +273,11 @@ class PrenormTransformer(nn.Module):
         self.rmsnorm_2 = RMSNorm(d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.MHA.forward(self.rmsnorm_1.forward(x))
+        x = x + self.MHA.forward_with_rope(self.rmsnorm_1.forward(x))
         x = x + self.swiglu.forward(self.rmsnorm_2.forward(x))
         
         return x
+
 
 class TransformerLanguageModel(nn.Module):
     def __init__(
@@ -277,11 +285,25 @@ class TransformerLanguageModel(nn.Module):
         d_model: int, 
         num_heads: int, 
         d_ff: int, 
-        max_seq_len: int, 
         theta: float, 
         vocab_size: int, 
         context_length: int, 
         num_layers: int
     ):
         super().__init__()
+
+        self.token_embeddings = Embedding(vocab_size, d_model)
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
+            self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta))
+        self.ln_final = RMSNorm(d_model)
+        self.lm_head = Linear(d_model, vocab_size)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.token_embeddings.forward(x)
+        for layer in self.layers:
+            x = layer.forward(x)
+        x = self.ln_final.forward(x)
+        x = self.lm_head.forward(x)
         
+        return x
