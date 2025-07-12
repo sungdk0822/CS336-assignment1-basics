@@ -3,7 +3,7 @@ import torch
 from collections.abc import Callable
 from jaxtyping import Float, Int
 from torch import Tensor
-from typing import Optional
+from typing import Optional, Iterable
 
 
 '''Given a tensor of inputs and targets, compute the average cross-entropy
@@ -125,5 +125,21 @@ def cosine_lr_schedule(
         return min_learning_rate
 
 
+def clip_gradient(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
+    total = 0.0
+    for parameter in parameters:
+        if parameter.grad is not None:
+            total += (parameter.grad.data ** 2).sum()
+    l2_norm = total ** 0.5
+    if l2_norm > max_l2_norm:
+        epsilon = 1e-6
+        for parameter in parameters:
+            if parameter.grad is not None:
+                parameter.grad.data *= max_l2_norm / (l2_norm + epsilon)
+
+
 if __name__ == '__main__':
+    g = torch.arange(4).reshape(2,2).float()
+    l2_norm = (g ** 2).sum().sqrt().item()
+    g *= 0.5
     pass
