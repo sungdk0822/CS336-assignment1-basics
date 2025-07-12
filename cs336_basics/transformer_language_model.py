@@ -43,7 +43,7 @@ class Embedding(nn.Module):
         super().__init__()
         self.embedding = nn.Parameter(
             trunc_normal_(
-                torch.zeros(num_embeddings, embedding_dim, device=device, dtype=dtype, requires_grad=True), 
+                torch.empty(num_embeddings, embedding_dim, device=device, dtype=dtype, requires_grad=True), 
                 mean=0,
                 std=1,
                 a=-3,
