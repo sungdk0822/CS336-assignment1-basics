@@ -1,24 +1,26 @@
 import math
 import numpy as np
 import numpy.typing as npt
+import os
 import torch
+import typing
 from collections.abc import Callable
 from jaxtyping import Float, Int
 from torch import Tensor
 from typing import Optional, Iterable
 
 
-'''Given a tensor of inputs and targets, compute the average cross-entropy
-loss across examples.
+'''
+    Given a tensor of inputs and targets, compute the average cross-entropy loss across examples.
 
-Args:
-    inputs (Float[Tensor, 'batch_size vocab_size']): inputs[i][j] is the
-        unnormalized logit of jth class for the ith example.
-    targets (Int[Tensor, 'batch_size']): Tensor of shape (batch_size,) with the index of the correct class.
-        Each value must be between 0 and `num_classes - 1`.
+    Args:
+        inputs (Float[Tensor, 'batch_size vocab_size']): inputs[i][j] is the
+            unnormalized logit of jth class for the ith example.
+        targets (Int[Tensor, 'batch_size']): Tensor of shape (batch_size,) with the index of the correct class.
+            Each value must be between 0 and `num_classes - 1`.
 
-Returns:
-    Float[Tensor, '']: The average cross-entropy loss across examples.
+    Returns:
+        Float[Tensor, '']: The average cross-entropy loss across examples.
 '''
 def cross_entropy(inputs: Float[Tensor, ' batch_size vocab_size'], targets: Int[Tensor, ' batch_size']) -> Float[Tensor, '']:
     stable_inputs = inputs - inputs.max(dim=-1, keepdim=True).values # subtract the largest element for numerical stability
@@ -82,12 +84,12 @@ class AdamW(torch.optim.Optimizer):
 
 
 '''
-The cosine annealing learning rate schedule takes 
-    (i) the current iteration t, 
-    (ii) the maximum learning rate alpha_max, 
-    (iii) the minimum (final) learning rate alpha_min, 
-    (iv) the number of warm-up iterations T_w, and 
-    (v) the number of cosine annealing iterations T_c.
+    The cosine annealing learning rate schedule takes 
+        (i) the current iteration t, 
+        (ii) the maximum learning rate alpha_max, 
+        (iii) the minimum (final) learning rate alpha_min, 
+        (iv) the number of warm-up iterations T_w, and 
+        (v) the number of cosine annealing iterations T_c.
 '''
 '''
     Given the parameters of a cosine learning rate decay schedule (with linear
@@ -180,6 +182,35 @@ def get_batch(
     labels = torch.tensor(labels, device=device)
 
     return inputs, labels
+
+
+def save_checkpoint(
+    model: torch.nn.Module, 
+    optimizer: torch.optim.Optimizer, 
+    iteration: int, 
+    out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
+) -> None:
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+    entire_state = {
+        'model_state': model_state,
+        'optimizer_state': optimizer_state,
+        'iteration': iteration
+    }
+    torch.save(entire_state, out)
+
+
+def load_checkpoint(
+    src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], 
+    model: torch.nn.Module, 
+    optimizer: torch.optim.Optimizer
+) -> int:
+    entire_state = torch.load(src)
+    model.load_state_dict(entire_state['model_state'])
+    optimizer.load_state_dict(entire_state['optimizer_state'])
+    iteration = entire_state['iteration']
+
+    return iteration
 
 
 if __name__ == '__main__':
