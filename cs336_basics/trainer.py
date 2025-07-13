@@ -1,4 +1,6 @@
 import math
+import numpy as np
+import numpy.typing as npt
 import torch
 from collections.abc import Callable
 from jaxtyping import Float, Int
@@ -138,8 +140,47 @@ def clip_gradient(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) 
                 parameter.grad.data *= max_l2_norm / (l2_norm + epsilon)
 
 
+'''
+    Given a dataset (a 1D numpy array of integers) and a desired batch size and
+    context length, sample language modeling input sequences and their corresponding
+    labels from the dataset.
+
+    Args:
+        dataset (np.array): 1D numpy array of integer token IDs in the dataset.
+        batch_size (int): Desired batch size to sample.
+        context_length (int): Desired context length of each sampled example.
+        device (str): PyTorch device string (e.g., 'cpu' or 'cuda:0') indicating the device
+            to place the sampled input sequences and labels on.
+
+    Returns:
+        Tuple of torch.LongTensors of shape (batch_size, context_length). The first tuple item
+        is the sampled input sequences, and the second tuple item is the corresponding
+        language modeling labels.
+'''
+def get_batch(
+    dataset: npt.NDArray, 
+    batch_size: int, 
+    context_length: int, 
+    device: str
+) -> tuple[torch.Tensor, torch.Tensor]:
+    n = dataset.shape[0]
+    input_start_indices = torch.randint(0, n - context_length, (batch_size,))
+    input_end_indices = input_start_indices + context_length
+
+    input_start_indices = input_start_indices.tolist()
+    input_end_indices = input_end_indices.tolist()
+
+    inputs = [ dataset[start:end] for start, end in zip(input_start_indices, input_end_indices) ]
+    labels = [ dataset[start+1:end+1] for start, end in zip(input_start_indices, input_end_indices) ]
+
+    inputs = np.array(inputs) # convert to numpy arrays first to avoid warnings when creating torch tensors
+    labels = np.array(labels) # convert to numpy arrays first to avoid warnings when creating torch tensors
+
+    inputs = torch.tensor(inputs, device=device)
+    labels = torch.tensor(labels, device=device)
+
+    return inputs, labels
+
+
 if __name__ == '__main__':
-    g = torch.arange(4).reshape(2,2).float()
-    l2_norm = (g ** 2).sum().sqrt().item()
-    g *= 0.5
     pass
