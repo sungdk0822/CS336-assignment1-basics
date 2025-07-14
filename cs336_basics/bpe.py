@@ -156,13 +156,13 @@ class Tokenizer:
         self.merges = merges
         self.special_tokens = special_tokens if special_tokens is not None else []
 
+        if '<|endoftext|>' not in self.special_tokens:
+            self.special_tokens.append('<|endoftext|>')
+
         for special_token in self.special_tokens:
             byte_special_token = special_token.encode('utf-8')
             if byte_special_token not in self.vocab.values():
                 self.vocab[len(vocab)] = byte_special_token
-
-        if '<|endoftext|>' not in self.special_tokens:
-            self.special_tokens.append('<|endoftext|>')
 
         self.reversed_vocab = {token: token_id for token_id, token in self.vocab.items()}
 
