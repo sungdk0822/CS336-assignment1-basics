@@ -116,6 +116,9 @@ class RoPE(nn.Module):
         self.register_buffer(name='cos', tensor=cos_values, persistent=False)
         self.register_buffer(name='sin', tensor=sin_values, persistent=False)
 
+        self.cos = self.cos.to(device=device)
+        self.sin = self.sin.to(device=device)
+
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
         '''
         Process an input tensor of shape (..., seq_len, d_k) and return a tensor of the same shape.
@@ -125,7 +128,7 @@ class RoPE(nn.Module):
         '''
         cos_values = self.cos[token_positions] # self.cos: (max_seq_len, d_k // 2) -> cos_values: (seq_len, d_k // 2) # pyright: ignore
         sin_values = self.sin[token_positions] # self.sin: (max_seq_len, d_k // 2) -> sin_values: (seq_len, d_k // 2) # pyright: ignore
-
+        
         x_even = x[..., ::2] # (batch_size, seq_len, d_k // 2)
         x_odd = x[..., 1::2] # (batch_size, seq_len, d_k // 2)
 
@@ -186,7 +189,7 @@ def scaled_dot_product_attention(
 
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, rope: RoPE | None = None):
+    def __init__(self, d_model: int, num_heads: int, rope: RoPE | None = None, device=None, dtype=None):
         super().__init__()
         assert d_model % num_heads == 0
         self.d_model = d_model
@@ -194,10 +197,11 @@ class MultiHeadSelfAttention(nn.Module):
         if rope is not None:
             self.rope = rope
         self.d_k = self.d_v = d_model // num_heads
-        self.W_Q = Linear(d_model, d_model)
-        self.W_K = Linear(d_model, d_model)
-        self.W_V = Linear(d_model, d_model)
-        self.W_O = Linear(d_model, d_model)
+        self.W_Q = Linear(d_model, d_model, device, dtype)
+        self.W_K = Linear(d_model, d_model, device, dtype)
+        self.W_V = Linear(d_model, d_model, device, dtype)
+        self.W_O = Linear(d_model, d_model, device, dtype)
+        self.device = device
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (batch_size, seq_len, d_model)
@@ -209,7 +213,7 @@ class MultiHeadSelfAttention(nn.Module):
         V = V.reshape(*V.shape[:-1], self.num_heads, self.d_v).transpose(-3, -2) # (batch_size, num_heads, seq_len, d_v)
 
         seq_len = x.shape[-2]
-        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool().to(device=self.device)
         pre_concat = scaled_dot_product_attention(Q, K, V, causal_mask) # (batch_size, num_heads, seq_len, d_v)
         post_concat = pre_concat.transpose(-3, -2).reshape_as(x) # (batch_size, seq_len, d_model)
 
@@ -231,7 +235,7 @@ class MultiHeadSelfAttention(nn.Module):
         Q = self.rope.forward(Q, token_positions)
         K = self.rope.forward(K, token_positions)
 
-        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool().to(device=self.device)
         pre_concat = scaled_dot_product_attention(Q, K, V, causal_mask) # (batch_size, num_heads, seq_len, d_v)
         post_concat = pre_concat.transpose(-3, -2).reshape_as(x) # (batch_size, seq_len, d_model)
 
@@ -239,13 +243,13 @@ class MultiHeadSelfAttention(nn.Module):
 
 
 class PrenormTransformer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float, device=None, dtype=None):
         super().__init__()
-        rope = RoPE(theta, d_model // num_heads, max_seq_len)
-        self.MHA = MultiHeadSelfAttention(d_model, num_heads, rope)
-        self.swiglu = SwiGLU(d_model, d_ff)
-        self.rmsnorm_1 = RMSNorm(d_model)
-        self.rmsnorm_2 = RMSNorm(d_model)
+        rope = RoPE(theta, d_model // num_heads, max_seq_len, device)
+        self.MHA = MultiHeadSelfAttention(d_model, num_heads, rope, device, dtype)
+        self.swiglu = SwiGLU(d_model, d_ff, device, dtype)
+        self.rmsnorm_1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.rmsnorm_2 = RMSNorm(d_model, device=device, dtype=dtype)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.MHA.forward_with_rope(self.rmsnorm_1.forward(x))
@@ -263,16 +267,18 @@ class TransformerLanguageModel(nn.Module):
         theta: float, 
         vocab_size: int, 
         context_length: int, 
-        num_layers: int
+        num_layers: int, 
+        device=None, 
+        dtype=None
     ):
         super().__init__()
 
-        self.token_embeddings = Embedding(vocab_size, d_model)
+        self.token_embeddings = Embedding(vocab_size, d_model, device, dtype)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta))
-        self.ln_final = RMSNorm(d_model)
-        self.lm_head = Linear(d_model, vocab_size)
+            self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta, device, dtype))
+        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device, dtype)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.token_embeddings.forward(x)
