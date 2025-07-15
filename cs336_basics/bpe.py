@@ -61,15 +61,16 @@ def train_bpe(
     special_tokens: list[str], 
     num_processes: int = 1
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
-    with open(input_path, "rb") as f:
-        boundaries = find_chunk_boundaries(f, num_processes, "<|endoftext|>".encode("utf-8"))
+    with open(input_path, 'rb') as f:
+        print('bpe train starts...')
+        boundaries = find_chunk_boundaries(f, num_processes, '<|endoftext|>'.encode('utf-8'))
 
         # multiprocessing implementation
         output_queue = multiprocessing.Queue()
         processes = []
         for start, end in zip(boundaries[:-1], boundaries[1:]):
             f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
+            chunk = f.read(end - start).decode('utf-8', errors='ignore')
             process = multiprocessing.Process(target=multiprocess_pretokenize, args=(chunk, special_tokens, output_queue))
             process.start()
             processes.append(process)
@@ -78,7 +79,9 @@ def train_bpe(
         for process in processes:
             pretokens = output_queue.get()
             merged_pretokens += Counter(pretokens)
-            process.join() # https://stackoverflow.com/questions/29810041/python-weird-behavior-with-multiprocessing-join-does-not-execute
+
+        for process in processes:
+            process.join()
         
         merged_pretokens = dict(merged_pretokens)
         byte_pretokens = {tuple([int.to_bytes() for int in pretoken.encode('utf-8')]): count for pretoken, count in merged_pretokens.items()}
@@ -123,6 +126,9 @@ def train_bpe(
                 updated_byte_pretokens[updated_token] = byte_pretokens[token]
 
             byte_pretokens = updated_byte_pretokens
+            print(f'{len(vocab)} / {vocab_size} ({int(len(vocab) / vocab_size * 100)} percent done)', end='\r')
+
+        print()
 
     return vocab, merges
 
@@ -268,7 +274,8 @@ class Tokenizer:
         Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs. 
         This is required for memory-efficient tokenization of large files that we cannot directly load into memory.
         '''
-        for text in iterable:
+        from tqdm import tqdm
+        for text in tqdm(iterable):
             yield from self.encode(text)
 
     def decode(self, ids: list[int]) -> str:
