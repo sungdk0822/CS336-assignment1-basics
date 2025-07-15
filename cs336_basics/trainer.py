@@ -1,3 +1,4 @@
+from cmath import cos
 import math
 import numpy as np
 import numpy.typing as npt
@@ -249,7 +250,53 @@ def tokenize_and_save_corpus_ids(
     tokenizer = torch.load(tokenizer_path, weights_only=False)
     with open(corpus_path, 'rb') as f:
         corpus = f.read().decode('utf-8', errors='ignore')
-        corpus_ids = np.array(tokenizer.encode(corpus))
+        # corpus_ids = np.array(tokenizer.encode(corpus))
+        corpus_ids = []
+        for id in tokenizer.encode_iterable(corpus):
+            corpus_ids.append(id)
+        corpus_ids = np.array(corpus_ids, dtype=np.uint16)
+        np.save(corpus_ids_save_path, corpus_ids)
+
+
+def multiprocess_tokenize_and_save_corpus_ids(
+    tokenizer_path: str,
+    corpus_path: str,
+    corpus_ids_save_path: str,
+    num_processes: int = 1
+) -> None:
+    import multiprocessing
+    from cs336_basics.pretokenization_example import find_chunk_boundaries
+
+    tokenizer = torch.load(tokenizer_path, weights_only=False)
+
+    with open(corpus_path, 'rb') as f:
+        boundaries = find_chunk_boundaries(f, num_processes, '<|endoftext|>'.encode('utf-8'))
+
+        def tokenize(chunk, output_queue: multiprocessing.Queue) -> None:
+            # tokenizer = torch.load(tokenizer_path, weights_only=False)
+            chunk_ids = []
+            for id in tokenizer.encode_iterable(chunk):
+                chunk_ids.append(id)
+            output_queue.put(chunk_ids)
+
+        output_queue = multiprocessing.Queue()
+        processes = []
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            f.seek(start)
+            chunk = f.read(end - start).decode('utf-8', errors='ignore')
+            process = multiprocessing.Process(target=tokenize, args=(chunk, output_queue))
+            process.start()
+            processes.append(process)
+
+        corpus_ids = []
+        for _ in processes:
+            chunk_ids = output_queue.get()
+            corpus_ids.extend(chunk_ids)
+
+        for process in processes:
+            process.join()
+
+        corpus_ids = np.array(corpus_ids, dtype=np.uint16)
         np.save(corpus_ids_save_path, corpus_ids)
 
 
@@ -279,43 +326,51 @@ if __name__ == '__main__':
     dtype = torch.float32
     print(f'using {device} device')
     bpe_train_corpus_path = config.corpus_path
-    vocab_size = 2048
+    vocab_size = 10000
     special_tokens = []
     tokenizer_path = config.tokenizer_path
 
-    # train_and_save_tokenizer(bpe_train_corpus_path, vocab_size, special_tokens, tokenizer_path)
+    train_and_save_tokenizer(bpe_train_corpus_path, vocab_size, special_tokens, tokenizer_path)
 
     pretrain_corpus_path = config.corpus_path
     validation_corpus_path = config.validation_corpus_path
     corpus_ids_path = config.corpus_ids_path
     validation_corpus_ids_path = config.validation_corpus_ids_path
 
-    # tokenize_and_save_corpus_ids(tokenizer_path, pretrain_corpus_path, corpus_ids_path)
-    tokenize_and_save_corpus_ids(tokenizer_path, validation_corpus_path, validation_corpus_ids_path)
+    multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, pretrain_corpus_path, corpus_ids_path, num_processes=12)
+    multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, validation_corpus_path, validation_corpus_ids_path, num_processes=12)
 
     use_wandb = True
     use_consine_lr_schedule = True
     use_gradient_clipping = True
-    cosine_lr_schedule_config = CosineLRScheduleConfig()
-    d_model = 1024
-    num_heads = 4
-    d_ff = 4096
+    d_model = 512
+    num_heads = 16
+    d_ff = 1344 # This is roughly (8/3) * d_model while being a multiple of 64, which is good for GPU performance.
     theta = 10000.0
-    context_length = 1024
-    num_layers = 12
+    context_length = 256
+    num_layers = 4
     checkpoint_load_path = ''
     max_l2_norm = 0.0
     lr = 1e-3
     weight_decay = 0.01
     betas = (0.9, 0.999)
-    batch_size = 16
-    validation_batch_size = 16
-    steps = 20
-    save_steps = 5
-    validation_steps = 5
+    batch_size = 1024
+    validation_batch_size = 1024
+    steps = 600
+    save_steps = 100
+    validation_steps = 10
+    l2_norm_logging_steps = 10
     checkpoint_save_dir = config.checkpoint_dir
     if len(checkpoint_save_dir) != 0 and checkpoint_save_dir[-1] != '/':
         checkpoint_save_dir += '/'
+
+    cosine_lr_schedule_config = CosineLRScheduleConfig(
+        it=0,
+        max_learning_rate=lr,
+        min_learning_rate=0.0,
+        warmup_iters=int(0.1 * steps),
+        cosine_cycle_iters=steps
+    )
 
     model = TransformerLanguageModel(d_model, num_heads, d_ff, theta, vocab_size, context_length, num_layers, device, dtype)
     optimizer = AdamW(model.parameters(), lr, weight_decay, betas)
@@ -353,9 +408,24 @@ if __name__ == '__main__':
         loss = cross_entropy(softmax(lm_head_output, dim=-1), label_ids)
         print(f'step {iteration}, loss = {loss.cpu().item():.5f}')
 
+        loss.backward()
+
+        if l2_norm_logging_steps != 0 and iteration % l2_norm_logging_steps == 0:
+            total = 0.0
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    total += (parameter.grad.data ** 2).sum()
+            l2_norm = total ** 0.5
+            if use_wandb:
+                wandb.log(
+                    {
+                        'gradient l2 norm': l2_norm
+                    }, 
+                    step=iteration
+                )
+
         if use_gradient_clipping and max_l2_norm > 0:
             clip_gradient(model.parameters(), max_l2_norm)
-        loss.backward()
         optimizer.step()
 
         if use_wandb:
