@@ -1,4 +1,3 @@
-from cmath import cos
 import math
 import numpy as np
 import numpy.typing as npt
@@ -242,27 +241,12 @@ def train_and_save_tokenizer(
     return len(tokenizer.vocab)
 
 
-def tokenize_and_save_corpus_ids(
-    tokenizer_path: str,
-    corpus_path: str,
-    corpus_ids_save_path: str
-) -> None:
-    tokenizer = torch.load(tokenizer_path, weights_only=False)
-    with open(corpus_path, 'rb') as f:
-        corpus = f.read().decode('utf-8', errors='ignore')
-        # corpus_ids = np.array(tokenizer.encode(corpus))
-        corpus_ids = []
-        for id in tokenizer.encode_iterable(corpus):
-            corpus_ids.append(id)
-        corpus_ids = np.array(corpus_ids, dtype=np.uint16)
-        np.save(corpus_ids_save_path, corpus_ids)
-
-
 def multiprocess_tokenize_and_save_corpus_ids(
     tokenizer_path: str,
     corpus_path: str,
     corpus_ids_save_path: str,
-    num_processes: int = 1
+    num_processes: int = 1,
+    max_cache_len: int = 0
 ) -> None:
     import multiprocessing
     from cs336_basics.pretokenization_example import find_chunk_boundaries
@@ -272,26 +256,36 @@ def multiprocess_tokenize_and_save_corpus_ids(
     with open(corpus_path, 'rb') as f:
         boundaries = find_chunk_boundaries(f, num_processes, '<|endoftext|>'.encode('utf-8'))
 
-        def tokenize(chunk, output_queue: multiprocessing.Queue) -> None:
-            # tokenizer = torch.load(tokenizer_path, weights_only=False)
+        def tokenize(chunk, output_queue: multiprocessing.Queue, use_tqdm: bool = False) -> None:
             chunk_ids = []
-            for id in tokenizer.encode_iterable(chunk):
+            np_chunk_ids = np.array([], dtype=np.uint16)
+
+            for id in tokenizer.encode_iterable(chunk, use_tqdm, max_cache_len):
                 chunk_ids.append(id)
-            output_queue.put(chunk_ids)
+                if len(chunk_ids) == 1024 * 1024:
+                    np_chunk_ids = np.concatenate((np_chunk_ids, np.array(chunk_ids, dtype=np.uint16)))
+                    chunk_ids = []
+
+            if len(chunk_ids) != 0:
+                np_chunk_ids = np.concatenate((np_chunk_ids, np.array(chunk_ids, dtype=np.uint16)))
+            
+            output_queue.put(np_chunk_ids)
 
         output_queue = multiprocessing.Queue()
         processes = []
+        use_tqdm = True # only the first process uses tqdm to display progress
         for start, end in zip(boundaries[:-1], boundaries[1:]):
             f.seek(start)
             chunk = f.read(end - start).decode('utf-8', errors='ignore')
-            process = multiprocessing.Process(target=tokenize, args=(chunk, output_queue))
+            process = multiprocessing.Process(target=tokenize, args=(chunk, output_queue, use_tqdm))
             process.start()
             processes.append(process)
+            use_tqdm = False # only the first process uses tqdm to display progress
 
-        corpus_ids = []
+        corpus_ids = np.array([], dtype=np.uint16)
         for _ in processes:
             chunk_ids = output_queue.get()
-            corpus_ids.extend(chunk_ids)
+            corpus_ids = np.concatenate((corpus_ids, chunk_ids))
 
         for process in processes:
             process.join()
@@ -330,15 +324,15 @@ if __name__ == '__main__':
     special_tokens = []
     tokenizer_path = config.tokenizer_path
 
-    train_and_save_tokenizer(bpe_train_corpus_path, vocab_size, special_tokens, tokenizer_path)
+    # train_and_save_tokenizer(bpe_train_corpus_path, vocab_size, special_tokens, tokenizer_path)
 
     pretrain_corpus_path = config.corpus_path
     validation_corpus_path = config.validation_corpus_path
     corpus_ids_path = config.corpus_ids_path
     validation_corpus_ids_path = config.validation_corpus_ids_path
 
-    multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, pretrain_corpus_path, corpus_ids_path, num_processes=12)
-    multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, validation_corpus_path, validation_corpus_ids_path, num_processes=12)
+    # multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, pretrain_corpus_path, corpus_ids_path, num_processes=12, max_cache_len=1024)
+    # multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, validation_corpus_path, validation_corpus_ids_path, num_processes=12, max_cache_len=1024)
 
     use_wandb = True
     use_consine_lr_schedule = True
