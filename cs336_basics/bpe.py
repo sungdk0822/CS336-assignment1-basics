@@ -203,7 +203,7 @@ class Tokenizer:
 
         return Tokenizer(vocab, merges, special_tokens)
 
-    def encode(self, text: str) -> list[int]:
+    def encode(self, text: str, encode_dictionary: dict[str, tuple[int, ...]] | None = None) -> list[int]:
         '''Encode an input text into a sequence of token IDs.'''
         '''
         Step 1: Pre-tokenize. 
@@ -214,9 +214,11 @@ class Tokenizer:
             We then take the sequence of vocabulary element merges created during BPE
             training, and apply it to our pre-tokens in the same order of creation.
         '''
+        if encode_dictionary is None:
+            encode_dictionary = {}
 
-        pretokens = pretokenize(text, self.special_tokens)
-        byte_pretokens = [tuple([int.to_bytes() for int in pretoken.encode('utf-8')]) for pretoken in pretokens]
+        for special_token in self.special_tokens:
+            encode_dictionary[special_token] = self.reversed_vocab[special_token.encode('utf-8')]
 
         def merge_pretoken(pretoken: tuple[bytes, ...]) -> tuple[bytes, ...]:
             merged_token = pretoken
@@ -231,8 +233,6 @@ class Tokenizer:
                     index += 1
             
             return merged_token
-        
-        merged_pretokens = [merge_pretoken(byte_pretoken) for byte_pretoken in byte_pretokens]
 
         def encode_pretoken(merged_pretoken: tuple[bytes, ...]) -> tuple[int, ...]:
             encoded_pretoken = []
@@ -241,42 +241,46 @@ class Tokenizer:
             
             return tuple(encoded_pretoken)
         
-        encoded_pretokens = [encode_pretoken(merged_pretoken) for merged_pretoken in merged_pretokens]
-        encode_dictionary = {pretoken: encoded_pretoken for pretoken, encoded_pretoken in zip(pretokens, encoded_pretokens)}
+        escaped_special_tokens = [re.escape(special_token) for special_token in sorted(self.special_tokens, key=len, reverse=True)]
+        pattern = '|'.join(escaped_special_tokens)
+        capturing_pattern = '(' + pattern + ')'
+        split_chunks = re.split(capturing_pattern, text)
 
-        for special_token in self.special_tokens:
-            encode_dictionary[special_token] = self.reversed_vocab[special_token.encode('utf-8')]
+        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
         
-        def encode_text(text: str, encode_dictionary: dict[str, tuple[int, ...]]) -> list[int]:
-            escaped_special_tokens = [re.escape(special_token) for special_token in sorted(self.special_tokens, key=len, reverse=True)]
-            pattern = '|'.join(escaped_special_tokens)
-            capturing_pattern = '(' + pattern + ')'
-            split_chunks = re.split(capturing_pattern, text)
+        def append_to_encode_dictionary(pretoken: str) -> None:
+            byte_pretoken = tuple([int.to_bytes() for int in pretoken.encode('utf-8')])
+            merged_pretoken = merge_pretoken(byte_pretoken)
+            encoded_pretoken = encode_pretoken(merged_pretoken)
+            encode_dictionary[pretoken] = encoded_pretoken
 
-            PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-            
-            encoded_text = []
-            for split_chunk in split_chunks:
-                if split_chunk in self.special_tokens:
-                    encoded_text.append(encode_dictionary[split_chunk])
-                else: # normal chunk
-                    matches = re.finditer(PAT, split_chunk)
-                    for match in matches:
-                        pretoken = match.group()
-                        encoded_text.extend(encode_dictionary[pretoken])
-            
-            return encoded_text
+        encoded_text = []
+        for split_chunk in split_chunks:
+            if split_chunk in self.special_tokens:
+                encoded_text.append(encode_dictionary[split_chunk])
+                    
+            else: # normal chunk
+                matches = re.finditer(PAT, split_chunk)
+                for match in matches:
+                    pretoken = match.group()
+                    if pretoken not in encode_dictionary:
+                        append_to_encode_dictionary(pretoken)
+                    encoded_text.extend(encode_dictionary[pretoken])
 
-        return encode_text(text, encode_dictionary)
+        return encoded_text
 
-    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+    def encode_iterable(self, iterable: Iterable[str], use_tqdm: bool = False, max_cache_len: int = 0) -> Iterator[int]:
         '''
         Given an iterable of strings (e.g., a Python file handle), return a generator that lazily yields token IDs. 
         This is required for memory-efficient tokenization of large files that we cannot directly load into memory.
         '''
         from tqdm import tqdm
-        for text in tqdm(iterable):
-            yield from self.encode(text)
+        encode_dictionary = {}
+        iter = tqdm(iterable) if use_tqdm else iterable
+        for text in iter:
+            if max_cache_len > 0 and len(encode_dictionary) > max_cache_len:
+                encode_dictionary = {} # simply clears the cache (a replacement algorithm could be used, but is omitted here)
+            yield from self.encode(text, encode_dictionary)
 
     def decode(self, ids: list[int]) -> str:
         '''Decode a sequence of token IDs into text.'''
