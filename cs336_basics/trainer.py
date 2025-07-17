@@ -182,8 +182,8 @@ def get_batch(
     inputs = np.array(inputs) # convert to numpy arrays first to avoid warnings when creating torch tensors
     labels = np.array(labels) # convert to numpy arrays first to avoid warnings when creating torch tensors
 
-    inputs = torch.tensor(inputs, device=device)
-    labels = torch.tensor(labels, device=device)
+    inputs = torch.tensor(inputs, device=device, dtype=torch.int)
+    labels = torch.tensor(labels, device=device, dtype=torch.int)
 
     return inputs, labels
 
@@ -295,164 +295,199 @@ def multiprocess_tokenize_and_save_corpus_ids(
 
 
 @dataclass
-class CosineLRScheduleConfig:
-    it: int = 0
-    max_learning_rate: float = 1e-3
-    min_learning_rate: float = 1e-5
-    warmup_iters: int = 100
-    cosine_cycle_iters: int = 1000
+class Config:
     def get_config(self):
         return (getattr(self, field.name) for field in fields(self))
 
 
+@dataclass
+class TransformerLanguageModelConfig(Config):
+    d_model: int = 512
+    num_heads: int = 16
+    d_ff: int = 1344
+    theta: float = 10000.0
+    vocab_size: int = 10000
+    context_length: int = 256
+    num_layers: int = 4
+    device: str = 'cuda'
+    dtype: torch.dtype = torch.float32
+
+
+@dataclass
+class CosineLRScheduleConfig(Config):
+    it: int = 0
+    max_learning_rate: float = 1e-3
+    min_learning_rate: float = 0.0
+    warmup_iters: int | None = None
+    cosine_cycle_iters: int = 1000
+    def __post_init__(self):
+        if self.warmup_iters is None:
+            self.warmup_iters = int(0.1 * self.cosine_cycle_iters)
+
+
+@dataclass
+class GradientClippingConfig(Config):
+    max_l2_norm: float = 1.0
+    l2_norm_logging_steps: int | None = None
+
+
+@dataclass
+class Trainer:
+    model: torch.nn.Module
+    optimizer: torch.optim.Optimizer
+    context_length: int
+    lr: float = 1e-3
+    batch_size: int = 64
+    validation_batch_size: int = 64
+    steps: int = 10
+    validation_steps: int | None = None
+    lr_schedule_config: CosineLRScheduleConfig | None = None
+    gradient_clipping_config: GradientClippingConfig | None = None
+    checkpoint_load_path: str | None = None
+    save_steps: int | None = None
+    use_wandb: bool = True
+
+    def train(self):
+        if self.checkpoint_load_path is None:
+            iteration = 1
+        if self.checkpoint_load_path is not None:
+            iteration = load_checkpoint(self.checkpoint_load_path, self.model, self.optimizer)
+
+        corpus_ids = np.load(config.corpus_ids_path + '.npy', mmap_mode='r')
+        validation_corpus_ids = np.load(config.validation_corpus_ids_path + '.npy', mmap_mode='r')
+
+        if self.use_wandb:
+            wandb.login()
+            run = wandb.init(
+                project='cs336-assignment1',
+                config={
+                    'learning rate': self.lr,
+                    'steps': self.steps,
+                },
+            )
+
+        while iteration <= self.steps:
+            if self.save_steps is not None and iteration % self.save_steps == 0:
+                checkpoint_save_path = config.checkpoint_dir + f'iteration-{iteration}'
+                save_checkpoint(self.model, self.optimizer, iteration, checkpoint_save_path)
+
+            if self.lr_schedule_config is not None:
+                self.lr_schedule_config.it = iteration
+                self.optimizer.param_groups[0]['lr'] = cosine_lr_schedule(*self.lr_schedule_config.get_config())
+            self.optimizer.zero_grad()
+
+            input_ids, label_ids = get_batch(corpus_ids, self.batch_size, self.context_length, device)
+            lm_head_output = self.model.forward(input_ids)
+            loss = cross_entropy(softmax(lm_head_output, dim=-1), label_ids)
+            print(f'step {iteration}, loss = {loss.cpu().item():.5f}')
+
+            loss.backward()
+
+            if (self.gradient_clipping_config is not None 
+                and self.gradient_clipping_config.l2_norm_logging_steps is not None
+                and iteration % self.gradient_clipping_config.l2_norm_logging_steps == 0):
+                total = 0.0
+                for parameter in self.model.parameters():
+                    if parameter.grad is not None:
+                        total += (parameter.grad.data ** 2).sum()
+                l2_norm = total ** 0.5
+                if self.use_wandb:
+                    wandb.log(
+                        {
+                            'gradient l2 norm': l2_norm
+                        }, 
+                        step=iteration
+                    )
+
+            if self.gradient_clipping_config is not None and self.gradient_clipping_config.max_l2_norm > 0:
+                clip_gradient(self.model.parameters(), self.gradient_clipping_config.max_l2_norm)
+            self.optimizer.step()
+
+            if self.use_wandb:
+                wandb.log(
+                    {
+                        'train loss': loss,
+                        'learning rate': self.optimizer.param_groups[0]['lr']
+                    }, 
+                    step=iteration
+                )
+
+            if self.validation_steps is not None and iteration % self.validation_steps == 0:
+                self.model.eval()
+                validation_input_ids, validation_label_ids = get_batch(validation_corpus_ids, self.validation_batch_size, self.context_length, device) 
+                # todo: modify to perform validation on the entire validation corpus
+                with torch.no_grad():
+                    lm_head_output = self.model.forward(validation_input_ids)
+                    loss = cross_entropy(softmax(lm_head_output, dim=-1), validation_label_ids)
+                    print(f'validation loss = {loss.cpu().item():.5f}')
+                self.model.train()
+
+                if self.use_wandb:
+                    wandb.log(
+                        {
+                            'validation loss': loss
+                        }, 
+                        step=iteration
+                    )
+
+            iteration += 1
+        
+        wandb.finish()
+
+        iteration -= 1
+        checkpoint_save_path = config.checkpoint_dir + f'iteration-{iteration}'
+        save_checkpoint(self.model, self.optimizer, iteration, checkpoint_save_path)
+    
+
 if __name__ == '__main__':
-    pass
     import os
     import config
     import wandb
     from cs336_basics.bpe import Tokenizer, train_bpe
     from cs336_basics.transformer_language_model import TransformerLanguageModel, softmax
     
-    # todo 1: modify to accept hyperparameters via argparse
-    # todo 2: separate hyperparameters into dataclasses
+    # todo: modify to accept hyperparameters via argparse
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    dtype = torch.float32
     print(f'using {device} device')
-    bpe_train_corpus_path = config.corpus_path
+
     vocab_size = 10000
     special_tokens = []
-    tokenizer_path = config.tokenizer_path
 
-    # train_and_save_tokenizer(bpe_train_corpus_path, vocab_size, special_tokens, tokenizer_path)
+    # train_and_save_tokenizer(config.bpe_train_corpus_path, vocab_size, special_tokens, config.tokenizer_path)
 
-    pretrain_corpus_path = config.corpus_path
-    validation_corpus_path = config.validation_corpus_path
-    corpus_ids_path = config.corpus_ids_path
-    validation_corpus_ids_path = config.validation_corpus_ids_path
+    # multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.corpus_path, config.corpus_ids_path, num_processes=12, max_cache_len=1024)
+    # multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.validation_corpus_path, config.validation_corpus_ids_path, num_processes=12, max_cache_len=1024)
 
-    # multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, pretrain_corpus_path, corpus_ids_path, num_processes=12, max_cache_len=1024)
-    # multiprocess_tokenize_and_save_corpus_ids(tokenizer_path, validation_corpus_path, validation_corpus_ids_path, num_processes=12, max_cache_len=1024)
-
-    use_wandb = True
-    use_consine_lr_schedule = True
-    use_gradient_clipping = True
-    d_model = 512
-    num_heads = 16
-    d_ff = 1344 # This is roughly (8/3) * d_model while being a multiple of 64, which is good for GPU performance.
-    theta = 10000.0
-    context_length = 256
-    num_layers = 4
-    checkpoint_load_path = ''
-    max_l2_norm = 0.0
     lr = 1e-3
-    weight_decay = 0.01
-    betas = (0.9, 0.999)
-    batch_size = 1024
-    validation_batch_size = 1024
-    steps = 600
-    save_steps = 100
-    validation_steps = 10
-    l2_norm_logging_steps = 10
-    checkpoint_save_dir = config.checkpoint_dir
-    if len(checkpoint_save_dir) != 0 and checkpoint_save_dir[-1] != '/':
-        checkpoint_save_dir += '/'
+    context_length = 256
+    batch_size = 128
+    validation_batch_size = 128
+    steps = 5000
+    validation_steps = 250
+
+    model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config())
+
+    optimizer = AdamW(model.parameters(), lr)
 
     cosine_lr_schedule_config = CosineLRScheduleConfig(
-        it=0,
-        max_learning_rate=lr,
-        min_learning_rate=0.0,
-        warmup_iters=int(0.1 * steps),
-        cosine_cycle_iters=steps
+        max_learning_rate = lr,
+        cosine_cycle_iters = steps
     )
-
-    model = TransformerLanguageModel(d_model, num_heads, d_ff, theta, vocab_size, context_length, num_layers, device, dtype)
-    optimizer = AdamW(model.parameters(), lr, weight_decay, betas)
-
-    if checkpoint_load_path == '':
-        iteration = 1
-    if checkpoint_load_path != '':
-        iteration = load_checkpoint(checkpoint_load_path, model, optimizer)
-
-    corpus_ids = np.load(corpus_ids_path + '.npy', mmap_mode='r')
-    validation_corpus_ids = np.load(validation_corpus_ids_path + '.npy', mmap_mode='r')
-
-    if use_wandb:
-        wandb.login()
-        run = wandb.init(
-            project='cs336-assignment1',
-            config={
-                'learning rate': lr,
-                'steps': steps,
-            },
-        )
-
-    while iteration <= steps:
-        if save_steps != 0 and iteration % save_steps == 0:
-            checkpoint_save_path = checkpoint_save_dir + f'iteration-{iteration}'
-            save_checkpoint(model, optimizer, iteration, checkpoint_save_path)
-
-        if use_consine_lr_schedule:
-            cosine_lr_schedule_config.it = iteration
-            optimizer.param_groups[0]['lr'] = cosine_lr_schedule(*cosine_lr_schedule_config.get_config())
-        optimizer.zero_grad()
-
-        input_ids, label_ids = get_batch(corpus_ids, batch_size, context_length, device)
-        lm_head_output = model.forward(input_ids)
-        loss = cross_entropy(softmax(lm_head_output, dim=-1), label_ids)
-        print(f'step {iteration}, loss = {loss.cpu().item():.5f}')
-
-        loss.backward()
-
-        if l2_norm_logging_steps != 0 and iteration % l2_norm_logging_steps == 0:
-            total = 0.0
-            for parameter in model.parameters():
-                if parameter.grad is not None:
-                    total += (parameter.grad.data ** 2).sum()
-            l2_norm = total ** 0.5
-            if use_wandb:
-                wandb.log(
-                    {
-                        'gradient l2 norm': l2_norm
-                    }, 
-                    step=iteration
-                )
-
-        if use_gradient_clipping and max_l2_norm > 0:
-            clip_gradient(model.parameters(), max_l2_norm)
-        optimizer.step()
-
-        if use_wandb:
-            wandb.log(
-                {
-                    'train loss': loss,
-                    'learning rate': optimizer.param_groups[0]['lr']
-                }, 
-                step=iteration
-            )
-
-        if validation_steps != 0 and iteration % validation_steps == 0:
-            model.eval()
-            validation_input_ids, validation_label_ids = get_batch(validation_corpus_ids, validation_batch_size, context_length, device) 
-            # todo: modify to perform validation on the entire validation corpus
-            with torch.no_grad():
-                lm_head_output = model.forward(validation_input_ids)
-                loss = cross_entropy(softmax(lm_head_output, dim=-1), validation_label_ids)
-                print(f'step {iteration}, validation loss = {loss.cpu().item():.5f}')
-            model.train()
-
-            if use_wandb:
-                wandb.log(
-                    {
-                        'validation loss': loss
-                    }, 
-                    step=iteration
-                )
-
-        iteration += 1
-    
-    wandb.finish()
-
-    iteration -= 1
-    checkpoint_save_path = checkpoint_save_dir + f'iteration-{iteration}'
-    save_checkpoint(model, optimizer, iteration, checkpoint_save_path)
+    gradient_clipping_config = GradientClippingConfig(
+        max_l2_norm = 1.0,
+        l2_norm_logging_steps = 10
+    )
+    trainer = Trainer(
+        model,
+        optimizer,
+        context_length,
+        lr,
+        batch_size,
+        validation_batch_size,
+        steps,
+        validation_steps,
+        cosine_lr_schedule_config,
+        gradient_clipping_config
+    )
+    trainer.train()
