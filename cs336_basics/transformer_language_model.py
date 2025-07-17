@@ -290,6 +290,17 @@ class TransformerLanguageModel(nn.Module):
         return x
 
 
+# # todo: implement Loss_ExpBal. Device level balancing term -> omitted
+# class DeepSeekMoE(nn.Module):
+#     def __init__(
+#         self,
+#         num_shared_experts: int = 2,
+#         num_routed_experts: int = 64,
+#         num_active_experts: int = 4, # number excluding shared experts
+
+#     ):
+
+
 if __name__ == '__main__':
     '''
     Problem (transformer_accounting): Transformer LM resource accounting (5 points)
