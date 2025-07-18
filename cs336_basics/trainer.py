@@ -31,7 +31,6 @@ def cross_entropy(inputs: Float[Tensor, ' batch_size vocab_size'], targets: Int[
     negative_log_likelihood = stable_inputs.exp().sum(dim=-1).log() - stable_inputs[torch.arange(inputs.shape[0]), targets]
     return negative_log_likelihood.mean()
 
-
 class AdamW(torch.optim.Optimizer):
     def __init__(
         self, 
@@ -188,6 +187,32 @@ def get_batch(
     return inputs, labels
 
 
+'''
+from assignment_1 p.41:
+A common first step when developing any neural net architecture is to overfit to a single minibatch. If
+your implementation is correct, you should be able to quickly drive the training loss to near-zero.
+'''
+def get_single_batch(
+    dataset: npt.NDArray, 
+    batch_size: int, # this parameter is (intentionally) not used
+    context_length: int, 
+    device: str
+) -> tuple[torch.Tensor, torch.Tensor]:
+    input_start_indices = [0] # fix index to 0
+    input_end_indices = [0 + context_length]
+
+    inputs = [ dataset[start:end] for start, end in zip(input_start_indices, input_end_indices) ]
+    labels = [ dataset[start+1:end+1] for start, end in zip(input_start_indices, input_end_indices) ]
+
+    inputs = np.array(inputs) # convert to numpy arrays first to avoid warnings when creating torch tensors
+    labels = np.array(labels) # convert to numpy arrays first to avoid warnings when creating torch tensors
+
+    inputs = torch.tensor(inputs, device=device, dtype=torch.int)
+    labels = torch.tensor(labels, device=device, dtype=torch.int)
+
+    return inputs, labels
+
+
 def save_checkpoint(
     model: torch.nn.Module, 
     optimizer: torch.optim.Optimizer, 
@@ -294,6 +319,18 @@ def multiprocess_tokenize_and_save_corpus_ids(
         np.save(corpus_ids_save_path, corpus_ids)
 
 
+def inspect_sample():
+    context_length = 256
+    tokenizer = torch.load(config.tokenizer_path, weights_only=False)
+
+    corpus_ids = np.load(config.corpus_ids_path + '.npy', mmap_mode='r')
+    input_ids, label_ids = get_batch(corpus_ids, 1, context_length, 'cpu')
+
+    print(tokenizer.decode(input_ids.tolist()[0]))
+    print()
+    print(tokenizer.decode(label_ids.tolist()[0]))
+
+
 @dataclass
 class Config:
     def get_config(self):
@@ -378,8 +415,9 @@ class Trainer:
 
             input_ids, label_ids = get_batch(corpus_ids, self.batch_size, self.context_length, device)
             lm_head_output = self.model.forward(input_ids)
-            loss = cross_entropy(softmax(lm_head_output, dim=-1), label_ids)
-            print(f'step {iteration}, loss = {loss.cpu().item():.5f}')
+            loss = cross_entropy(lm_head_output, label_ids)
+            print(' '*50, end='\r')
+            print(f'step {iteration} / {self.steps}, loss = {loss.cpu().item():.4f}', end='\r')
 
             loss.backward()
 
@@ -418,8 +456,9 @@ class Trainer:
                 # todo: modify to perform validation on the entire validation corpus
                 with torch.no_grad():
                     lm_head_output = self.model.forward(validation_input_ids)
-                    loss = cross_entropy(softmax(lm_head_output, dim=-1), validation_label_ids)
-                    print(f'validation loss = {loss.cpu().item():.5f}')
+                    loss = cross_entropy(lm_head_output, validation_label_ids)
+                    print(' '*50, end='\r')
+                    print(f'validation loss = {loss.cpu().item():.4f}', end='\r')
                 self.model.train()
 
                 if self.use_wandb:
@@ -444,8 +483,8 @@ if __name__ == '__main__':
     import config
     import wandb
     from cs336_basics.bpe import Tokenizer, train_bpe
-    from cs336_basics.transformer_language_model import TransformerLanguageModel, softmax
-    
+    from cs336_basics.transformer_language_model import TransformerLanguageModel
+
     # todo: modify to accept hyperparameters via argparse
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -463,31 +502,36 @@ if __name__ == '__main__':
     context_length = 256
     batch_size = 128
     validation_batch_size = 128
-    steps = 5000
-    validation_steps = 250
+    total_tokens_processed = 327680000
+    steps = int(total_tokens_processed / batch_size / context_length)
+    validation_steps = int(0.05 * steps)
+    print(f'steps: {steps}')
+    print(f'validation steps: {validation_steps}')
 
-    model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config())
+    for lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
 
-    optimizer = AdamW(model.parameters(), lr)
+        model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config())
 
-    cosine_lr_schedule_config = CosineLRScheduleConfig(
-        max_learning_rate = lr,
-        cosine_cycle_iters = steps
-    )
-    gradient_clipping_config = GradientClippingConfig(
-        max_l2_norm = 1.0,
-        l2_norm_logging_steps = 10
-    )
-    trainer = Trainer(
-        model,
-        optimizer,
-        context_length,
-        lr,
-        batch_size,
-        validation_batch_size,
-        steps,
-        validation_steps,
-        cosine_lr_schedule_config,
-        gradient_clipping_config
-    )
-    trainer.train()
+        optimizer = AdamW(model.parameters(), lr)
+
+        cosine_lr_schedule_config = CosineLRScheduleConfig(
+            max_learning_rate = lr,
+            cosine_cycle_iters = steps
+        )
+        gradient_clipping_config = GradientClippingConfig(
+            max_l2_norm = 1.0,
+            l2_norm_logging_steps = 50
+        )
+        trainer = Trainer(
+            model,
+            optimizer,
+            context_length,
+            lr,
+            batch_size,
+            validation_batch_size,
+            steps,
+            validation_steps,
+            cosine_lr_schedule_config,
+            # gradient_clipping_config
+        )
+        trainer.train()
