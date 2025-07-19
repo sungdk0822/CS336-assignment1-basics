@@ -232,11 +232,12 @@ def save_checkpoint(
 def load_checkpoint(
     src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], 
     model: torch.nn.Module, 
-    optimizer: torch.optim.Optimizer
+    optimizer: torch.optim.Optimizer | None = None
 ) -> int:
     entire_state = torch.load(src)
     model.load_state_dict(entire_state['model_state'])
-    optimizer.load_state_dict(entire_state['optimizer_state'])
+    if optimizer is not None:
+        optimizer.load_state_dict(entire_state['optimizer_state'])
     iteration = entire_state['iteration']
 
     return iteration
@@ -329,6 +330,32 @@ def inspect_sample():
     print(tokenizer.decode(input_ids.tolist()[0]))
     print()
     print(tokenizer.decode(label_ids.tolist()[0]))
+
+
+def load_and_generate(
+    context_length: int,
+    checkpoint_file_name: str, # file name must include the file extension if it exists
+    end_token: str,
+    prompt: str,
+    completion_only: bool = False,
+    max_generation_tokens: int | None = None,
+    temparature: float = 1.0,
+    top_p: float = 1.0
+) -> None:
+    model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config())
+    load_checkpoint(config.checkpoint_dir + checkpoint_file_name, model)
+    tokenizer = torch.load(config.tokenizer_path, weights_only=False)
+    end_token_id = tokenizer.encode(end_token)[0]
+    input_ids = tokenizer.encode(prompt)
+    output = model.generate(
+        input_ids, 
+        end_token_id, 
+        completion_only=completion_only,
+        max_generation_tokens=max_generation_tokens,
+        temparature=temparature,
+        top_p=top_p
+    )
+    print(tokenizer.decode(output))
 
 
 @dataclass
