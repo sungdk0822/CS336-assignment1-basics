@@ -107,7 +107,7 @@ class RoPE(nn.Module):
 
         i_indices = torch.arange(max_seq_len)
         k_indices = torch.arange(0, d_k // 2)
-        i_grid, k_grid = torch.meshgrid(i_indices, k_indices)
+        i_grid, k_grid = torch.meshgrid(i_indices, k_indices, indexing='ij')
 
         theta_values = i_grid / theta ** (2 * k_grid / d_k) # (max_seq_len, d_k // 2)
         cos_values = torch.cos(theta_values) # (max_seq_len, d_k // 2)
@@ -279,6 +279,9 @@ class TransformerLanguageModel(nn.Module):
             self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta, device, dtype))
         self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.lm_head = Linear(d_model, vocab_size, device, dtype)
+        self.context_length = context_length
+        self.device = device
+        self.dtype = dtype
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.token_embeddings.forward(x)
@@ -288,6 +291,50 @@ class TransformerLanguageModel(nn.Module):
         x = self.lm_head.forward(x)
         
         return x
+
+    def generate(
+        self, 
+        input_ids: list[int],
+        end_token_id: int,
+        completion_only: bool = False,
+        max_generation_tokens: int | None = None,
+        temparature: float = 1.0,
+        top_p : float = 1.0
+    ):
+        initial_prompt_len = len(input_ids)
+        assert initial_prompt_len < self.context_length, f'len(input_ids) must be smaller than self.context_length = {self.context_length}'
+        assert temparature >= 0.0, 'temperature must be greater than or equal to 0'
+        assert 0.0 <= top_p <= 1.0 
+        if temparature == 0.0:
+            temparature = 1e-6 # close to greedy decoding, but not implemented to be 100% greedy decoding
+
+        if max_generation_tokens is None:
+            max_generation_tokens = self.context_length - initial_prompt_len
+        if initial_prompt_len + max_generation_tokens > self.context_length:
+            max_generation_tokens = self.context_length - initial_prompt_len
+
+        while max_generation_tokens is None or len(input_ids) < initial_prompt_len + max_generation_tokens:
+            logits = self.forward(torch.tensor(input_ids, dtype=torch.int, device=self.device))
+            logits /= temparature
+            probabilities = softmax(logits, dim=-1) # (1, seq_len, vocab_size)
+            probabilities = probabilities[0, -1, :] # (vocab_size, )
+            if top_p != 1.0:
+                sorted_probabilities, sorted_indices = torch.sort(probabilities, descending=True)
+                cumsum = torch.cumsum(sorted_probabilities, dim = -1) # (vocab_size, )
+                p_index = torch.searchsorted(cumsum, top_p)
+                sorted_probabilities = sorted_probabilities[:p_index + 1]
+                sorted_probabilities /= cumsum[p_index]
+                next_token_index = torch.multinomial(sorted_probabilities, 1)
+                next_token_id = sorted_indices[next_token_index].item()
+            else:
+                next_token_id = torch.multinomial(probabilities, 1).item()
+            
+            input_ids.append(next_token_id) # pyright: ignore
+
+            if next_token_id == end_token_id or len(input_ids) >= self.context_length:
+                break
+        
+        return input_ids if not completion_only else input_ids[initial_prompt_len:]
 
 
 # # todo: implement Loss_ExpBal. Device level balancing term -> omitted
