@@ -424,6 +424,7 @@ class Trainer:
             wandb.login()
             run = wandb.init(
                 project='cs336-assignment1',
+                name=f'lr{self.lr:.0e}_ablation_{self.model.ablation_mode}',
                 config={
                     'learning rate': self.lr,
                     'steps': self.steps,
@@ -530,14 +531,14 @@ if __name__ == '__main__':
     batch_size = 128
     validation_batch_size = 128
     total_tokens_processed = 327680000
-    steps = int(total_tokens_processed / batch_size / context_length)
-    validation_steps = int(0.05 * steps)
+    steps = int(total_tokens_processed / batch_size / context_length) // 3
+    validation_steps = int(0.02 * steps)
     print(f'steps: {steps}')
     print(f'validation steps: {validation_steps}')
 
-    for lr in [1e-3, 5e-4, 1e-4, 5e-5, 1e-5]:
+    for ablation_mode in [None, 'without_rmsnorm', 'postnorm', 'without_rope', 'silu']:
 
-        model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config())
+        model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config(), ablation_mode=ablation_mode)
 
         optimizer = AdamW(model.parameters(), lr)
 
@@ -546,8 +547,8 @@ if __name__ == '__main__':
             cosine_cycle_iters = steps
         )
         gradient_clipping_config = GradientClippingConfig(
-            max_l2_norm = 1.0,
-            l2_norm_logging_steps = 50
+            max_l2_norm = 10.0,
+            l2_norm_logging_steps = int(0.02 * steps)
         )
         trainer = Trainer(
             model,
@@ -559,6 +560,6 @@ if __name__ == '__main__':
             steps,
             validation_steps,
             cosine_lr_schedule_config,
-            # gradient_clipping_config
+            gradient_clipping_config
         )
         trainer.train()

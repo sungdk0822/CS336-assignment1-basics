@@ -1,6 +1,7 @@
 import torch
 from torch import inf, nn
 from torch.nn.init import trunc_normal_
+from typing import Literal
 from einops import einsum
 
 
@@ -81,6 +82,10 @@ class RMSNorm(nn.Module):
         return result.to(in_dtype)
 
 
+def SiLU(x: torch.Tensor) -> torch.Tensor:
+    return x * torch.sigmoid(x)
+
+
 class SwiGLU(nn.Module):
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
         super().__init__()
@@ -89,9 +94,24 @@ class SwiGLU(nn.Module):
         self.W_3 = Linear(d_model, d_ff, device, dtype)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        def SiLU(x: torch.Tensor) -> torch.Tensor:
-            return x * torch.sigmoid(x)
         return self.W_2( SiLU(self.W_1(x)) * (self.W_3(x)) )
+
+
+'''
+    from assignment_1 p.44:
+    Ablation 3: SwiGLU vs. SiLU
+    Next, we will follow Shazeer [2020] and test the importance of gating
+    in the feed-forward network, by comparing the performance of SwiGLU feed-forward networks versus feed-
+    forward networks using SiLU activations but no gated linear unit (GLU):
+'''
+class FFN_SiLU(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
+        super().__init__()
+        self.W_1 = Linear(d_model, d_ff, device, dtype)
+        self.W_2 = Linear(d_ff, d_model, device, dtype)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.W_2( SiLU( self.W_1(x) ) )
 
 
 class RoPE(nn.Module):
@@ -243,7 +263,17 @@ class MultiHeadSelfAttention(nn.Module):
 
 
 class PrenormTransformer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float, device=None, dtype=None):
+    def __init__(
+        self, 
+        d_model: int, 
+        num_heads: int, 
+        d_ff: int, 
+        max_seq_len: int, 
+        theta: float, 
+        device=None, 
+        dtype=None,
+        ablation_mode : Literal['without_rmsnorm', 'postnorm', 'without_rope', 'silu'] | None = None
+    ):
         super().__init__()
         rope = RoPE(theta, d_model // num_heads, max_seq_len, device)
         self.MHA = MultiHeadSelfAttention(d_model, num_heads, rope, device, dtype)
@@ -251,10 +281,48 @@ class PrenormTransformer(nn.Module):
         self.rmsnorm_1 = RMSNorm(d_model, device=device, dtype=dtype)
         self.rmsnorm_2 = RMSNorm(d_model, device=device, dtype=dtype)
 
+        if ablation_mode == 'without_rmsnorm':
+            self.forward = self.forward_without_rmsnorm
+        elif ablation_mode == 'postnorm':
+            self.forward = self.forward_postnorm
+        elif ablation_mode == 'without_rope':
+            self.forward = self.forward_without_rope
+        elif ablation_mode == 'silu':
+            self.ffn_silu = FFN_SiLU(d_model, d_ff, device, dtype)
+            self.forward = self.forward_silu
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.MHA.forward_with_rope(self.rmsnorm_1.forward(x))
         x = x + self.swiglu.forward(self.rmsnorm_2.forward(x))
+
+        return x
+
+    # forward function without RMSNorm for ablation on training stability
+    def forward_without_rmsnorm(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.MHA.forward_with_rope(x)
+        x = x + self.swiglu.forward(x)
         
+        return x
+
+    # forward function with post-Norm for comparison with pre-Norm
+    def forward_postnorm(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.rmsnorm_1.forward(x + self.MHA.forward_with_rope(x))
+        x = self.rmsnorm_2.forward(x + self.swiglu.forward(x))
+
+        return x
+
+    # forward function without RoPE for ablation on position embeddings
+    def forward_without_rope(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.MHA.forward(self.rmsnorm_1.forward(x))
+        x = x + self.swiglu.forward(self.rmsnorm_2.forward(x))
+
+        return x
+
+    # forward function with FFN_SiLU for comparison with SwiGLU
+    def forward_silu(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.MHA.forward_with_rope(self.rmsnorm_1.forward(x))
+        x = x + self.ffn_silu.forward(self.rmsnorm_2.forward(x))
+
         return x
 
 
@@ -268,8 +336,9 @@ class TransformerLanguageModel(nn.Module):
         vocab_size: int, 
         context_length: int, 
         num_layers: int, 
-        device=None, 
-        dtype=None
+        device = None, 
+        dtype = None,
+        ablation_mode : Literal['', 'without_rmsnorm', 'postnorm', 'without_rope', 'silu'] | None = None
     ):
         super().__init__()
 
@@ -282,6 +351,9 @@ class TransformerLanguageModel(nn.Module):
         self.context_length = context_length
         self.device = device
         self.dtype = dtype
+        if ablation_mode is None:
+            ablation_mode = ''
+        self.ablation_mode = ablation_mode
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.token_embeddings.forward(x)
@@ -306,7 +378,7 @@ class TransformerLanguageModel(nn.Module):
         assert temparature >= 0.0, 'temperature must be greater than or equal to 0'
         assert 0.0 <= top_p <= 1.0 
         if temparature == 0.0:
-            temparature = 1e-6 # close to greedy decoding, but not implemented to be 100% greedy decoding
+            temparature = 1e-6
 
         if max_generation_tokens is None:
             max_generation_tokens = self.context_length - initial_prompt_len
