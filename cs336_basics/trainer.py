@@ -541,8 +541,16 @@ if __name__ == '__main__':
     print(f'validation steps: {validation_steps}')
 
     for ablation_mode in [None, 'without_rmsnorm', 'postnorm', 'without_rope', 'silu']:
-
-        model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config(), ablation_mode=ablation_mode)
+        if ablation_mode == 'silu':
+            model = TransformerLanguageModel(
+                *TransformerLanguageModelConfig(
+                    context_length=context_length,
+                    d_ff = 4 * 512
+                ).get_config(), 
+                ablation_mode=ablation_mode
+            )
+        else:
+            model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config(), ablation_mode=ablation_mode)
         model = torch.compile(model)
 
         optimizer = AdamW(model.parameters(), lr)
