@@ -518,48 +518,48 @@ if __name__ == '__main__':
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f'using {device} device')
 
-    vocab_size = 10000
+    vocab_size = 10240
     special_tokens = []
 
-    # train_and_save_tokenizer(config.bpe_train_corpus_path, vocab_size, special_tokens, config.tokenizer_path)
+    train_and_save_tokenizer(config.bpe_train_corpus_path, vocab_size, special_tokens, config.tokenizer_path)
 
-    # multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.corpus_path, config.corpus_ids_path, num_processes=12, max_cache_len=1024)
-    # multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.validation_corpus_path, config.validation_corpus_ids_path, num_processes=12, max_cache_len=1024)
+    multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.validation_corpus_path, config.validation_corpus_ids_path, num_processes=12, max_cache_len=1024)
+    multiprocess_tokenize_and_save_corpus_ids(config.tokenizer_path, config.corpus_path, config.corpus_ids_path, num_processes=12, max_cache_len=1024)
 
-    lr = 1e-3
-    context_length = 256
-    batch_size = 128
-    validation_batch_size = 128
-    total_tokens_processed = 327680000
-    steps = int(total_tokens_processed / batch_size / context_length) // 3
-    validation_steps = int(0.02 * steps)
-    print(f'steps: {steps}')
-    print(f'validation steps: {validation_steps}')
+    # lr = 1e-3
+    # context_length = 256
+    # batch_size = 128
+    # validation_batch_size = 128
+    # total_tokens_processed = 327680000
+    # steps = int(total_tokens_processed / batch_size / context_length) // 2
+    # validation_steps = int(0.02 * steps)
+    # print(f'steps: {steps}')
+    # print(f'validation steps: {validation_steps}')
 
-    for ablation_mode in [None, 'without_rmsnorm', 'postnorm', 'without_rope', 'silu']:
+    # for ablation_mode in [None, 'without_rmsnorm', 'postnorm', 'without_rope', 'silu']:
 
-        model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config(), ablation_mode=ablation_mode)
+    #     model = TransformerLanguageModel(*TransformerLanguageModelConfig(context_length=context_length).get_config(), ablation_mode=ablation_mode)
 
-        optimizer = AdamW(model.parameters(), lr)
+    #     optimizer = AdamW(model.parameters(), lr)
 
-        cosine_lr_schedule_config = CosineLRScheduleConfig(
-            max_learning_rate = lr,
-            cosine_cycle_iters = steps
-        )
-        gradient_clipping_config = GradientClippingConfig(
-            max_l2_norm = 10.0,
-            l2_norm_logging_steps = int(0.02 * steps)
-        )
-        trainer = Trainer(
-            model,
-            optimizer,
-            context_length,
-            lr,
-            batch_size,
-            validation_batch_size,
-            steps,
-            validation_steps,
-            cosine_lr_schedule_config,
-            gradient_clipping_config
-        )
-        trainer.train()
+    #     cosine_lr_schedule_config = CosineLRScheduleConfig(
+    #         max_learning_rate = lr,
+    #         cosine_cycle_iters = steps
+    #     )
+    #     gradient_clipping_config = GradientClippingConfig(
+    #         max_l2_norm = 10.0,
+    #         l2_norm_logging_steps = int(0.02 * steps)
+    #     )
+    #     trainer = Trainer(
+    #         model,
+    #         optimizer,
+    #         context_length,
+    #         lr,
+    #         batch_size,
+    #         validation_batch_size,
+    #         steps,
+    #         validation_steps,
+    #         cosine_lr_schedule_config,
+    #         gradient_clipping_config
+    #     )
+    #     trainer.train()
