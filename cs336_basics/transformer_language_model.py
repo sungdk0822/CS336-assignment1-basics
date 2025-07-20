@@ -345,7 +345,7 @@ class TransformerLanguageModel(nn.Module):
         self.token_embeddings = Embedding(vocab_size, d_model, device, dtype)
         self.layers = nn.ModuleList()
         for _ in range(num_layers):
-            self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta, device, dtype))
+            self.layers.append(PrenormTransformer(d_model, num_heads, d_ff, context_length, theta, device, dtype, ablation_mode))
         self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
         self.lm_head = Linear(d_model, vocab_size, device, dtype)
         self.context_length = context_length
